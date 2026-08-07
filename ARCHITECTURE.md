@@ -90,7 +90,7 @@ flowchart TD
     xxHash -->|Cache Hit| Agent
     xxHash -->|Cache Miss| EmbedEngine
     EmbedEngine --> CosineMatch
-    CosineMatch -->|Similarity >= 0.90| Agent
+    CosineMatch -->|"Similarity >= 0.90"| Agent
     CosineMatch -->|Cache Miss| BrowserManager
 
     BrowserManager --> Chromium
@@ -98,14 +98,14 @@ flowchart TD
     PageExtractor --> AXSnapshot
     PageExtractor --> VisionFallback
 
-    VisionFallback -->|Yes (Canvas/SPA)| GroqVLM
-    VisionFallback -->|No (Standard HTML)| Compressor
+    VisionFallback -->|"Yes (Canvas/SPA)"| GroqVLM
+    VisionFallback -->|"No (Standard HTML)"| Compressor
     GroqVLM --> Compressor
     AXSnapshot --> Compressor
 
     Compressor --> FeatExtractor
     FeatExtractor --> LGBMModel
-    LGBMModel -->|Confidence < 0.65| HeuristicEngine
+    LGBMModel -->|"Confidence < 0.65"| HeuristicEngine
     LGBMModel & HeuristicEngine --> DiffEngine
 
     DiffEngine -->|Update Cache| DB
@@ -114,7 +114,7 @@ flowchart TD
     DB --- TableSessions
     DB --- TableReplay
 
-    BrowserManager <-->|Persist / Load Cookies & Storage| TableSessions
+    BrowserManager <-->|"Persist / Load Cookies & Storage"| TableSessions
     RuleExecutor <--> MacroEngine
     MacroEngine <--> TableMacros
 

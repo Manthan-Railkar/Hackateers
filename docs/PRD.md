@@ -36,7 +36,7 @@ flowchart TD
     C -->|Tier 2: Semantic Cosine Match| E[Reuse Classification + Extract Fresh UI]
     C -->|Cache Miss| F[Playwright Browser Manager: manager.py]
     F --> G[Page Extractor: extractor.py]
-    G -->|Interactive Tags < 3| H[Visual Fallback: Groq Llama 3.2 Vision]
+    G -->|"Interactive Tags < 3"| H[Visual Fallback: Groq Llama 3.2 Vision]
     G -->|Normal HTML| I[Context Compressor: compressor.py]
     H --> I
     I --> J[Feature Extractor & ML Classifier: classifier.py]
