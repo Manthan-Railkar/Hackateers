@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Browser Optimizer Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-dark: #0f172a;
+            --glass-bg: rgba(30, 41, 59, 0.7);
+            --glass-border: rgba(255, 255, 255, 0.1);
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --accent: #38bdf8;
+            --success: #34d399;
+        }
+        body {
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            font-family: 'Inter', sans-serif;
+            margin: 0;
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        .badge {
+            background: var(--success);
+            color: #022c22;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            display: inline-block;
+            margin-top: 10px;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            width: 100%;
+            max-width: 1000px;
+        }
+        .card {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            padding: 1.5rem;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+            text-align: center;
+        }
+        .card h3 {
+            margin: 0 0 10px 0;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            text-transform: uppercase;
+        }
+        .card .value {
+            font-size: 2.5rem;
+            font-weight: 600;
+            color: var(--accent);
+            margin: 0;
+        }
+        .audit-link {
+            margin-top: 2rem;
+            color: var(--accent);
+            text-decoration: none;
+            border: 1px solid var(--accent);
+            padding: 10px 20px;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+        }
+        .audit-link:hover {
+            background: var(--accent);
+            color: var(--bg-dark);
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Browser Optimizer</h1>
+        <div class="badge">VERIFIED LLM TOKENS (tiktoken BPE)</div>
+    </div>
+    
+    <div class="grid">
+        <div class="card">
+            <h3>Total Requests</h3>
+            <p class="value" id="val-requests">0</p>
+        </div>
+        <div class="card">
+            <h3>Overall Compression</h3>
+            <p class="value"><span id="val-ratio">0</span>%</p>
+        </div>
+        <div class="card">
+            <h3>Tokens Saved</h3>
+            <p class="value" id="val-saved">0</p>
+        </div>
+        <div class="card">
+            <h3>Cache Hits</h3>
+            <p class="value" id="val-cache">0</p>
+        </div>
+        <div class="card">
+            <h3>Estimated Savings</h3>
+            <p class="value">$<span id="val-usd">0.00</span></p>
+        </div>
+        <div class="card">
+            <h3>Actions Executed</h3>
+            <p class="value" id="val-actions">0</p>
+        </div>
+    </div>
+    
+    <a href="/api/verify_comparison" class="audit-link" target="_blank">View Live Audit Report</a>
+
+    <script>
+        async function fetchMetrics() {
+            try {
+                const res = await fetch('/api/metrics');
+                const data = await res.json();
+                document.getElementById('val-requests').innerText = data.total_requests || 0;
+                document.getElementById('val-ratio').innerText = data.overall_compression_ratio_percent || 0;
+                document.getElementById('val-saved').innerText = (data.actual_tokens_saved || 0).toLocaleString();
+                document.getElementById('val-cache').innerText = data.cache_hits || 0;
+                document.getElementById('val-usd').innerText = (data.estimated_cost_savings_usd || 0).toFixed(4);
+                document.getElementById('val-actions').innerText = data.actions_executed || 0;
+            } catch (err) {
+                console.error("Failed to fetch metrics", err);
+            }
+        }
+        
+        setInterval(fetchMetrics, 3000);
+        fetchMetrics();
+    </script>
+</body>
+</html>
