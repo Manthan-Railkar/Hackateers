@@ -3,7 +3,7 @@
 
 ---
 
-## 💡 The Inspiration / Problem
+## The Inspiration / Problem
 
 AI Agents are revolutionizing web automation, but interacting with modern websites is bottlenecked by severe limitations:
 
@@ -14,7 +14,7 @@ AI Agents are revolutionizing web automation, but interacting with modern websit
 
 ---
 
-## 🚀 What it Does & Key Features
+## What it Does & Key Features
 
 **Pidgey** is an intelligent Model Context Protocol (MCP) middleware operating between AI Agents and the Web. It intercepts navigation requests, strips non-essential markup, caches structural representations, recovers transparently from browser failures, and bypasses browser execution entirely when static documentation is detected.
 
@@ -29,7 +29,7 @@ AI Agents are revolutionizing web automation, but interacting with modern websit
 
 ---
 
-## 🛠️ Tech Stack
+## Tech Stack
 
 - **Core Runtime**: Python 3.10+
 - **MCP Framework**: FastMCP (MCP Protocol Version 2026-07-28 Compliance)
@@ -42,7 +42,7 @@ AI Agents are revolutionizing web automation, but interacting with modern websit
 
 ---
 
-## ⚙️ Installation & Setup
+## Installation & Setup
 
 ### Prerequisites
 
