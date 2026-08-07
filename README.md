@@ -13,19 +13,19 @@ Pidgey acts as an intelligent intermediary (Model Context Protocol Server) that 
 
 ---
 
-## Key Features
+## ✨ Key Features
 
-- **Extreme Token Compression**: Decomposes non-essential tags (scripts, SVGs, styles) and extracts purely interactive UI controls into a compact JSON schema.
-- **Semantic Caching & Embedding**: Automatically embeds web page contexts locally using `SentenceTransformers` and SQLite. Identical or highly similar (cosine similarity > 0.90) page hits return instantly without re-rendering the DOM.
-- **Multimodal VLM Fallback**: For Canvas-heavy apps, CAPTCHAs, or SPAs lacking standard HTML controls, Pidgey automatically captures a screenshot and uses **Groq's Llama 3.2 Vision** model to extract interactive bounding boxes.
-- **Real-time Metrics Dashboard**: Includes a live, glassmorphic HTTP dashboard to visually track your LLM token savings (powered by accurate `tiktoken` byte-pair encoding counts) and cache hit ratios.
-- **FastMCP Integration**: Exposes a standard MCP stdio interface, instantly pluggable into any agent framework (like Claude Desktop or custom LangChain setups).
+- 🏎️ **Extreme Token Compression**: Decomposes non-essential tags (scripts, SVGs, styles) and extracts purely interactive UI controls into a compact JSON schema.
+- 🧠 **Semantic Caching & Embedding**: Automatically embeds web page contexts locally using `SentenceTransformers` and SQLite. Identical or highly similar (cosine similarity > 0.90) page hits return instantly without re-rendering the DOM.
+- 👁️ **Multimodal VLM Fallback**: For Canvas-heavy apps, CAPTCHAs, or SPAs lacking standard HTML controls, Pidgey automatically captures a screenshot and uses **Groq's Llama 3.2 Vision** model to extract interactive bounding boxes.
+- 📊 **Real-time Metrics Dashboard**: Includes a live, glassmorphic HTTP dashboard to visually track your LLM token savings (powered by accurate `tiktoken` byte-pair encoding counts) and cache hit ratios.
+- ⚡ **FastMCP Integration**: Exposes a standard MCP stdio interface, instantly pluggable into any agent framework (like Claude Desktop or custom LangChain setups).
 
 ---
 
-## Installation
+## 🛠️ Installation
 
-Pidgey is designed to be installed as a local CLI tool and Python package.
+Pidgey is designed to be installed as a local CLI tool and Python package. For a comprehensive integration guide across **Antigravity**, **Claude Desktop**, **Cursor**, and custom agents, see [SETUP.md](file:///c:/Users/Manthan%20Railkar/Desktop/Git/Pidgey/SETUP.md).
 
 ### 1. Clone the repository
 ```bash
@@ -64,7 +64,7 @@ GROQ_VISION_MODEL=llama-3.2-11b-vision-preview
 
 ---
 
-## Usage
+## 🚀 Usage
 
 Starting Pidgey is incredibly simple. Just run:
 
@@ -80,7 +80,7 @@ You can open `http://localhost:8050` in your browser at any time to watch your t
 
 ---
 
-## MCP Tools Exposed
+## 🧩 MCP Tools Exposed
 
 Once connected, your AI Agent will have access to the following native tools:
 
@@ -94,7 +94,7 @@ Once connected, your AI Agent will have access to the following native tools:
 
 ---
 
-## Testing and Benchmarks
+## 🧪 Testing and Benchmarks
 
 We've included a synthetic benchmark suite to verify the token compression ratios across complex webpages (e.g., HackerNews).
 ```bash
