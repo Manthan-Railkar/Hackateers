@@ -5,6 +5,8 @@ from browser_optimizer.cache.db import (
     delete_session_state,
     SessionStateStore,
 )
+from browser_optimizer.cache.embedding import StructuralEmbedding
+from browser_optimizer.cache.cache import SemanticCache
 
 __all__ = [
     "init_db",
@@ -12,4 +14,6 @@ __all__ = [
     "load_session_state",
     "delete_session_state",
     "SessionStateStore",
+    "StructuralEmbedding",
+    "SemanticCache",
 ]
