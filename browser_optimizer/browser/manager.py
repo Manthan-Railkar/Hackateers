@@ -1,162 +1,133 @@
-import asyncio
-from typing import Dict, Optional, Tuple
-from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
+"""
+Browser management module using Playwright.
+Handles launching, session contexts, page management, and teardown.
+"""
 
-from browser_optimizer.cache.db import load_session_state, save_session_state, init_db
-from browser_optimizer.config.settings import get_settings
+from typing import Any, Dict, Optional, Tuple
+from playwright.async_api import async_playwright, Playwright, Browser, BrowserContext, Page
+from browser_optimizer.config.settings import settings
 from browser_optimizer.utils.logger import logger
+from browser_optimizer.cache.db import session_state_store
 
 
 class BrowserManager:
     """
-    Async Playwright Browser Manager.
-    Manages browser context lifecycles, multi-session state isolation,
-    and automatic session persistence using SQLite storage.
+    Manages the lifecycle of a Playwright browser instance and standard page contexts
+    mapped by session_id to support isolated concurrent execution.
     """
-    _instance: Optional["BrowserManager"] = None
-
     def __init__(self):
-        self.settings = get_settings()
         self.playwright: Optional[Playwright] = None
         self.browser: Optional[Browser] = None
         self.sessions: Dict[str, Tuple[BrowserContext, Page]] = {}
-        self._lock = asyncio.Lock()
-        init_db()
 
-    async def _ensure_browser(self) -> None:
+
+    async def start(self):
         """
-        Ensures Playwright driver and Chromium browser instance are active.
+        Launch the Chromium instance in headless/headed mode according to settings.
+        Initializes the async Playwright driver.
         """
-        async with self._lock:
-            if not self.playwright:
-                logger.info("Starting Playwright driver...")
-                self.playwright = await async_playwright().start()
-            if not self.browser or not self.browser.is_connected():
-                logger.info(f"Launching Chromium headless={self.settings.HEADLESS}...")
-                self.browser = await self.playwright.chromium.launch(
-                    headless=self.settings.HEADLESS
-                )
-                logger.info("Chromium browser instance launched successfully.")
+        if self.browser is not None:
+            logger.info("Browser already started or mocked.")
+            return
+        logger.info("Starting Browser...")
+        self.playwright = await async_playwright().start()
+        self.browser = await self.playwright.chromium.launch(
+            headless=settings.HEADLESS
+        )
+        logger.info("Chromium Started")
+
+    async def stop(self):
+        """
+        Closes active pages and contexts across all sessions, then shuts down the browser.
+        """
+        logger.info("Stopping Browser...")
+        # Close all active sessions
+        for session_id in list(self.sessions.keys()):
+            await self.close_session(session_id)
+        if self.browser:
+            await self.browser.close()
+        if self.playwright:
+            await self.playwright.stop()
+        self.sessions.clear()
+        self.browser = None
+        self.playwright = None
+        logger.info("Chromium Stopped")
 
     async def get_page(self, session_id: str = "default") -> Page:
         """
-        Retrieves or creates a Page instance for the specified session_id.
-        Restores storage state from SQLite if available.
+        Retrieve the page context for the specified session_id.
+        Creates a new context and page if none exists, or if the page has been closed.
+        
+        Returns:
+            Page: Isolated Playwright page object ready for automation.
         """
-        await self._ensure_browser()
+        if session_id not in self.sessions or self.sessions[session_id][1].is_closed():
+            if self.browser is None:
+                raise RuntimeError("Browser not started. Call start() first.")
+            logger.info(f"Initializing new isolated BrowserContext for session: {session_id}")
+            
+            state: Any = None
+            try:
+                state = session_state_store.get_state(session_id)
+                if state:
+                    logger.info(f"Restoring previous session state for '{session_id}'")
+            except Exception as e:
+                logger.warning(f"Failed to load session state for '{session_id}': {e}")
 
-        async with self._lock:
-            if session_id in self.sessions:
-                context, page = self.sessions[session_id]
-                if not page.is_closed():
-                    return page
-                else:
-                    logger.warning(f"Page for session '{session_id}' was closed. Re-creating...")
-
-            # Load persistent session state from SQLite if exists
-            stored_state = load_session_state(session_id)
-            if stored_state:
-                logger.info(f"Restoring persistent session state for '{session_id}' from SQLite.")
-                context = await self.browser.new_context(storage_state=stored_state)
+            if state:
+                context = await self.browser.new_context(storage_state=state)
             else:
-                logger.info(f"Creating fresh BrowserContext for session '{session_id}'.")
                 context = await self.browser.new_context()
-
             page = await context.new_page()
             self.sessions[session_id] = (context, page)
-            return page
+        return self.sessions[session_id][1]
 
-    async def navigate(self, url: str, session_id: str = "default") -> Page:
+    async def navigate(self, url: str, session_id: str = "default"):
         """
-        Navigates the page for the given session_id to the target URL,
-        waits for DOM content loaded, and persists updated session state to SQLite.
+        Navigate to a specific URL and wait for DOM load completion in the given session.
+        
+        Args:
+            url (str): Target web application link.
+            session_id (str): Target session ID.
+            
+        Returns:
+            Page: Loaded page object.
         """
         page = await self.get_page(session_id)
-        logger.info(f"Session '{session_id}' navigating to URL: '{url}'")
-        
-        try:
-            await page.goto(
-                url,
-                timeout=self.settings.BROWSER_TIMEOUT,
-                wait_until="domcontentloaded"
-            )
-        except Exception as e:
-            logger.error(f"Navigation failed for session '{session_id}' to '{url}': {e}")
-            raise
-
-        # Auto-persist session cookies / storage state after navigation
-        await self.save_session(session_id)
+        await page.goto(url, timeout=settings.BROWSER_TIMEOUT, wait_until="domcontentloaded")
+        await self.save_session_state(session_id)
         return page
 
-    async def save_session(self, session_id: str = "default") -> None:
+    async def save_session_state(self, session_id: str):
         """
-        Extracts storage state (cookies, localStorage) from active context and saves to SQLite.
+        Save the browser context storage state for the session to the database.
         """
         if session_id in self.sessions:
-            context, _ = self.sessions[session_id]
+            context, page = self.sessions[session_id]
+            if not page.is_closed():
+                try:
+                    state = await context.storage_state()
+                    session_state_store.save_state(session_id, state)
+                    logger.info(f"Saved session state for '{session_id}' to database.")
+                except Exception as e:
+                    logger.warning(f"Failed to save session state for '{session_id}': {e}")
+
+    async def close_session(self, session_id: str):
+        """
+        Close page and BrowserContext for a specific session.
+        """
+        if session_id in self.sessions:
+            await self.save_session_state(session_id)
+            logger.info(f"Closing BrowserContext for session: {session_id}")
+            context, page = self.sessions[session_id]
             try:
-                storage_state = await context.storage_state()
-                save_session_state(session_id, storage_state)
-                logger.debug(f"Saved active storage state for session '{session_id}'.")
+                if not page.is_closed():
+                    await page.close()
+                await context.close()
             except Exception as e:
-                logger.error(f"Failed to extract/save storage state for session '{session_id}': {e}")
-
-    async def close_session(self, session_id: str = "default") -> None:
-        """
-        Closes context and page for a specific session_id.
-        """
-        async with self._lock:
-            if session_id in self.sessions:
-                context, page = self.sessions.pop(session_id)
-                try:
-                    if not page.is_closed():
-                        await page.close()
-                    await context.close()
-                    logger.info(f"Closed session '{session_id}'.")
-                except Exception as e:
-                    logger.error(f"Error closing session '{session_id}': {e}")
-
-    async def stop(self) -> None:
-        """
-        Shuts down all active browser sessions, closes Chromium browser instance,
-        and terminates Playwright driver cleanly.
-        """
-        async with self._lock:
-            logger.info("Shutting down BrowserManager...")
-            for session_id in list(self.sessions.keys()):
-                context, page = self.sessions.pop(session_id)
-                try:
-                    if not page.is_closed():
-                        await page.close()
-                    await context.close()
-                except Exception as e:
-                    logger.error(f"Error closing session '{session_id}' context: {e}")
-
-            if self.browser:
-                try:
-                    await self.browser.close()
-                except Exception as e:
-                    logger.error(f"Error closing browser: {e}")
-                self.browser = None
-
-            if self.playwright:
-                try:
-                    await self.playwright.stop()
-                except Exception as e:
-                    logger.error(f"Error stopping playwright: {e}")
-                self.playwright = None
-
-            logger.info("BrowserManager stopped successfully.")
+                logger.warning(f"Error closing session {session_id}: {e}")
+            self.sessions.pop(session_id, None)
 
 
-_global_manager: Optional[BrowserManager] = None
-
-
-def get_browser_manager() -> BrowserManager:
-    """
-    Returns singleton instance of BrowserManager.
-    """
-    global _global_manager
-    if _global_manager is None:
-        _global_manager = BrowserManager()
-    return _global_manager
+# Shared manager instance
+manager = BrowserManager()

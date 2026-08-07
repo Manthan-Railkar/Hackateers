@@ -1,161 +1,191 @@
-import json
-from datetime import datetime, timezone
+"""
+Semantic Cache module.
+Fingerprints HTML structure using xxhash for exact matches, and falls back to
+structural-embedding cosine similarity to recognise near-duplicate pages
+(same template, different data).
+"""
+
+import time
 import xxhash
-import numpy as np
-from typing import Dict, Any, Optional, Tuple, Union
-from urllib.parse import urlparse
-
-from browser_optimizer.config.settings import get_settings
-from browser_optimizer.cache.db import get_db_connection
-from browser_optimizer.cache.embedding import StructuralEmbedding
-from browser_optimizer.schemas.schemas import CompressedContext
+from typing import Dict, Any, Optional, Tuple
+from browser_optimizer.config.settings import settings
 from browser_optimizer.utils.logger import logger
-
+from browser_optimizer.cache.db import SQLiteCache
+from browser_optimizer.cache.embedding import structural_embedding
 
 class SemanticCache:
     """
-    Two-Tier Semantic Caching Subsystem.
-    - Tier 1: Sub-millisecond 64-bit xxhash exact string matching.
-    - Tier 2: 68-dimensional L2-normalized structural DOM vector embedding with Cosine Similarity matching (>= 0.90).
-    - Dynamic Confidence Auto-Decay: Reward (+0.05) on success, Penalty (-0.30) on failure.
+    Persistent caching system backed by SQLite.
+    Uses exact xxhash matching as the primary strategy, with structural-embedding
+    cosine similarity as a fallback for near-duplicate page detection.
     """
-    def __init__(self, db_path: Optional[str] = None):
-        self.settings = get_settings()
-        self.db_path = db_path or self.settings.SQLITE_DB_PATH
+    def __init__(self, enabled: Optional[bool] = None, ttl: Optional[int] = None, max_size: Optional[int] = None):
+        self.enabled = settings.CACHE_ENABLED if enabled is None else enabled
+        self.ttl = settings.CACHE_TTL if ttl is None else ttl
+        self.max_size = settings.CACHE_MAX_SIZE if max_size is None else max_size
+        self.similarity_threshold = settings.SIMILARITY_THRESHOLD
 
-    def _generate_hash(self, html: str) -> str:
+        self._cache = SQLiteCache(ttl=self.ttl)
+        # Maps URL to the last page hash to check for changes
+        self._url_to_hash: Dict[str, str] = {}
+        logger.info(
+            f"Semantic Cache initialized: Enabled={self.enabled}, TTL={self.ttl}s, "
+            f"MaxSize={self.max_size}, SimilarityThreshold={self.similarity_threshold}"
+        )
+
+    def generate_hash(self, text: str) -> str:
         """
-        Generates 64-bit xxhash hex string of raw HTML.
-        """
-        return xxhash.xxh64(html.encode("utf-8")).hexdigest()
-
-    def set(
-        self,
-        url: str,
-        html: str,
-        compressed_context: Union[CompressedContext, Dict[str, Any]],
-        page_type: str = "unknown",
-        confidence: float = 1.0
-    ) -> str:
-        """
-        Stores DOM compressed context, 68-D structural vector embedding, and metadata in SQLite cache table.
-        Returns generated xxhash key.
-        """
-        if not self.settings.CACHE_ENABLED:
-            return ""
-
-        key = self._generate_hash(html)
-        embedding = StructuralEmbedding.generate(html)
-        vector_blob = embedding.tobytes()
-
-        if isinstance(compressed_context, CompressedContext):
-            context_json = compressed_context.model_dump_json(exclude_none=True)
-        elif isinstance(compressed_context, dict):
-            context_json = json.dumps(compressed_context)
-        else:
-            context_json = str(compressed_context)
-
-        now = datetime.now(timezone.utc).isoformat()
-
-        with get_db_connection(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO cache (xxhash, url, vector_blob, compressed_context_json, page_type, confidence, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(xxhash) DO UPDATE SET
-                    url = excluded.url,
-                    vector_blob = excluded.vector_blob,
-                    compressed_context_json = excluded.compressed_context_json,
-                    page_type = excluded.page_type,
-                    confidence = excluded.confidence,
-                    updated_at = excluded.updated_at
-            """, (key, url, vector_blob, context_json, page_type, confidence, now))
-            conn.commit()
-
-        logger.info(f"Cached context for '{url}' with xxhash key: {key} (confidence={confidence:.2f})")
-        return key
-
-    def get(self, url: str, html: str) -> Tuple[Optional[CompressedContext], bool, float]:
-        """
-        Retrieves compressed context from cache.
-        Returns Tuple of (CompressedContext or None, is_semantic_match: bool, similarity_or_confidence: float).
-        """
-        if not self.settings.CACHE_ENABLED:
-            return None, False, 0.0
-
-        key = self._generate_hash(html)
-
-        with get_db_connection(self.db_path) as conn:
-            cursor = conn.cursor()
-
-            # Tier 1: Exact Hash Match (<1ms)
-            cursor.execute("SELECT compressed_context_json, confidence FROM cache WHERE xxhash = ?", (key,))
-            row = cursor.fetchone()
-            if row:
-                confidence = row["confidence"]
-                if confidence >= 0.30:
-                    logger.info(f"Tier 1 Cache Hit (Exact xxhash match) for '{url}' (confidence={confidence:.2f})")
-                    try:
-                        ctx_dict = json.loads(row["compressed_context_json"])
-                        ctx_model = CompressedContext.model_validate(ctx_dict)
-                        return ctx_model, False, confidence
-                    except Exception as e:
-                        logger.error(f"Error parsing cached context JSON for '{key}': {e}")
-
-            # Tier 2: Semantic Similarity Match (68-D Structural Embedding)
-            query_embedding = StructuralEmbedding.generate(html)
+        Generate a fast, non-cryptographic 64-bit signature of the HTML payload.
+        
+        Args:
+            text (str): Raw target string.
             
-            # Match against cached entries for same domain or all entries
-            domain = urlparse(url).netloc
-            cursor.execute("SELECT xxhash, url, vector_blob, compressed_context_json, confidence FROM cache")
-            rows = cursor.fetchall()
+        Returns:
+            str: Hex digest fingerprint.
+        """
+        return xxhash.xxh64(text.encode('utf-8', errors='ignore')).hexdigest()
 
-            best_match_row = None
-            max_similarity = 0.0
+    def lookup(self, url: str, current_html: str) -> Optional[Dict[str, Any]]:
+        """
+        Query the cache using a two-tier strategy:
 
-            for r in rows:
-                if r["confidence"] < 0.30:
-                    continue
-                cached_vector = np.frombuffer(r["vector_blob"], dtype=np.float64)
-                if len(cached_vector) == 68:
-                    sim = StructuralEmbedding.cosine_similarity(query_embedding, cached_vector)
-                    if sim > max_similarity:
-                        max_similarity = sim
-                        best_match_row = r
+        1. **Exact hash match** — compare xxhash of the current HTML against the
+           cached hash for this URL.  Fastest path.
+        2. **Semantic similarity fallback** — if the exact hash misses, compute a
+           structural embedding and cosine-similarity-scan all stored entries.
+           If the best match exceeds ``SIMILARITY_THRESHOLD``, return the cached
+           context tagged with ``semantic_match: True``.
 
-            if max_similarity >= self.settings.SIMILARITY_THRESHOLD and best_match_row:
+        Args:
+            url: Target URL key.
+            current_html: Freshly extracted HTML string.
+
+        Returns:
+            Cached context dict (with an optional ``semantic_match`` flag), or None.
+        """
+        if not self.enabled:
+            return None
+
+        current_hash = self.generate_hash(current_html)
+        cached_entry = self._cache.get(url)
+
+        # ── Tier 1: exact hash match ──────────────────────────
+        if cached_entry:
+            confidence = cached_entry.get("confidence", 0.8)
+            if confidence < 0.3:
+                logger.info(f"Cache entry confidence too low ({confidence:.2f} < 0.3). Skipping exact hit.")
+            else:
+                cached_hash = cached_entry.get("hash")
+                if cached_hash == current_hash:
+                    logger.info(f"Cache EXACT HIT for URL: {url}")
+                    raw_context = cached_entry.get("context") or {}
+                    ctx = dict(raw_context)
+                    ctx["confidence"] = confidence
+                    return ctx
+                else:
+                    logger.info(f"Cache MISMATCH (HTML changed) for URL: {url}")
+        else:
+            logger.info(f"Cache MISS for URL: {url}")
+
+        # ── Tier 2: semantic similarity fallback ──────────────
+        semantic_result = self._semantic_lookup(current_html)
+        if semantic_result is not None:
+            matched_context, score, matched_url, confidence = semantic_result
+            if confidence < 0.3:
+                logger.info(f"Cache semantic match confidence too low ({confidence:.2f} < 0.3). Skipping semantic hit.")
+            else:
                 logger.info(
-                    f"Tier 2 Cache Hit (Semantic Cosine Match = {max_similarity:.3f} >= {self.settings.SIMILARITY_THRESHOLD}) "
-                    f"for '{url}' matching cached URL '{best_match_row['url']}'"
+                    f"Cache SEMANTIC HIT for URL: {url} "
+                    f"(matched {matched_url}, similarity={score:.4f})"
                 )
-                try:
-                    ctx_dict = json.loads(best_match_row["compressed_context_json"])
-                    ctx_model = CompressedContext.model_validate(ctx_dict)
-                    return ctx_model, True, max_similarity
-                except Exception as e:
-                    logger.error(f"Error parsing semantic match context JSON: {e}")
+                # Return the cached context annotated with the semantic match info
+                ctx = dict(matched_context)  # shallow copy
+                ctx["semantic_match"] = True
+                ctx["similarity_score"] = round(score, 4)
+                ctx["matched_url"] = matched_url
+                ctx["confidence"] = confidence
+                return ctx
 
-        logger.info(f"Cache Miss for '{url}'")
-        return None, False, 0.0
+        # Store the current hash to associate with the URL
+        self._url_to_hash[url] = current_hash
+        return None
 
-    def update_confidence(self, html: str, success: bool) -> float:
+    def _semantic_lookup(
+        self, current_html: str
+    ) -> Optional[Tuple[Dict[str, Any], float, str, float]]:
         """
-        Updates dynamic confidence score for a cached entry.
-        Applies Reward (+0.05) on success, Penalty (-0.30) on failure.
-        Returns updated confidence score.
-        """
-        key = self._generate_hash(html)
-        delta = 0.05 if success else -0.30
+        Scan all cached embeddings for a near-duplicate structural match.
 
-        with get_db_connection(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT confidence FROM cache WHERE xxhash = ?", (key,))
-            row = cursor.fetchone()
-            if row:
-                current_conf = row["confidence"]
-                new_conf = round(max(0.0, min(1.0, current_conf + delta)), 2)
-                cursor.execute("UPDATE cache SET confidence = ? WHERE xxhash = ?", (new_conf, key))
-                conn.commit()
-                logger.info(f"Updated cache confidence for xxhash {key}: {current_conf:.2f} -> {new_conf:.2f}")
-                return new_conf
-        return 0.0
+        Returns:
+            A tuple of (cached_context, similarity_score, matched_url, confidence) if the
+            best cosine similarity exceeds the threshold, else None.
+        """
+        current_embedding = structural_embedding.generate(current_html)
+        entries = self._cache.get_all_embeddings()
+
+        if not entries:
+            return None
+
+        best_score = -1.0
+        best_context = None
+        best_url = None
+        best_confidence = 0.8
+
+        for stored_url, stored_embedding, stored_value in entries:
+            score = structural_embedding.cosine_similarity(
+                current_embedding, stored_embedding
+            )
+            if score > best_score:
+                best_score = score
+                best_context = stored_value.get("context")
+                best_url = stored_url
+                best_confidence = stored_value.get("confidence", 0.8)
+
+        if best_score >= self.similarity_threshold and best_context is not None and best_url is not None:
+            return (best_context, best_score, best_url, best_confidence)
+
+        return None
+
+    def store(self, url: str, html: str, compressed_context: Dict[str, Any]):
+        """
+        Store a compressed context payload along with the page's current HTML
+        signature and its structural embedding.
+
+        Args:
+            url: Target URL key.
+            html: Fresh raw HTML markup to hash and embed.
+            compressed_context: Compressed UI representation.
+        """
+        if not self.enabled:
+            return
+
+        page_hash = self.generate_hash(html)
+        embedding = structural_embedding.generate(html)
+
+        entry = {
+            "hash": page_hash,
+            "context": compressed_context,
+            "timestamp": time.time()
+        }
+        self._cache.set(url, entry, embedding=embedding)
+        self._url_to_hash[url] = page_hash
+        logger.info(f"Cached context for URL: {url} (Hash: {page_hash}, Embedding dim={len(embedding)})")
+
+    def update_confidence(self, url: str, success: bool):
+        """
+        Update the confidence score of a cache entry based on success/failure of interactions on that page.
+        """
+        if self.enabled:
+            self._cache.update_confidence(url, success)
+
+    def clear(self):
+        """
+        Flush all items from the cache.
+        """
+        self._cache.clear()
+        self._url_to_hash.clear()
+        logger.info("Cache cleared")
+
+# Shared semantic cache instance
+semantic_cache = SemanticCache()
+

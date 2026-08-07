@@ -1,154 +1,400 @@
-import json
+"""
+SQLite database module for persistent caching.
+Replaces the in-memory TTLCache with a persistent store that survives process restarts.
+"""
+
 import sqlite3
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
-from browser_optimizer.config.settings import get_settings
+import json
+import time
+from pathlib import Path
+from typing import Any, List, Optional, Tuple, Dict
 from browser_optimizer.utils.logger import logger
 
-
-def get_db_connection(db_path: Optional[str] = None) -> sqlite3.Connection:
+class SQLiteCache:
     """
-    Establishes and returns a connection to the SQLite database.
+    A dictionary-like interface over an SQLite database to act as a persistent TTL cache.
     """
-    if not db_path:
-        db_path = get_settings().SQLITE_DB_PATH
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    return conn
+    _PURGE_INTERVAL = 60  # seconds between automatic purge sweeps during get() calls
 
+    def __init__(self, db_path: str = "cache.db", ttl: int = 300):
+        self.db_path = db_path
+        self.ttl = ttl
+        self._last_purge: float = 0.0
+        self._init_db()
+        self.purge_expired()
 
-def init_db(db_path: Optional[str] = None) -> None:
-    """
-    Initializes the SQLite database schema if tables do not exist.
-    Creates session_states, cache, macros, and session_replay tables.
-    """
-    if not db_path:
-        db_path = get_settings().SQLITE_DB_PATH
-
-    logger.info(f"Initializing SQLite database schema at '{db_path}'")
-    with get_db_connection(db_path) as conn:
-        cursor = conn.cursor()
-        
-        # 1. Session States Table (Playwright context storage states)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS session_states (
-                session_id TEXT PRIMARY KEY,
-                storage_state_json TEXT NOT NULL,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        # 2. 2-Tier Cache Table (xxhash + vector embeddings)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS cache (
-                xxhash TEXT PRIMARY KEY,
-                url TEXT NOT NULL,
-                vector_blob BLOB,
-                compressed_context_json TEXT NOT NULL,
-                page_type TEXT,
-                confidence REAL DEFAULT 1.0,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        # 3. Macro Skills Table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS macros (
-                macro_id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                steps_json TEXT NOT NULL,
-                parameters_json TEXT NOT NULL,
-                confidence_score REAL DEFAULT 1.0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        # 4. Session Replay Telemetry Table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS session_replay (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL,
-                event_type TEXT NOT NULL,
-                details_json TEXT NOT NULL,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        conn.commit()
-    logger.info("SQLite database schema initialized successfully.")
-
-
-def save_session_state(session_id: str, storage_state: Dict[str, Any], db_path: Optional[str] = None) -> None:
-    """
-    Persists or updates a Playwright storage state JSON payload in session_states table.
-    """
-    if not db_path:
-        db_path = get_settings().SQLITE_DB_PATH
-    
-    storage_state_json = json.dumps(storage_state)
-    now = datetime.now(timezone.utc).isoformat()
-    
-    with get_db_connection(db_path) as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO session_states (session_id, storage_state_json, updated_at)
-            VALUES (?, ?, ?)
-            ON CONFLICT(session_id) DO UPDATE SET
-                storage_state_json = excluded.storage_state_json,
-                updated_at = excluded.updated_at
-        """, (session_id, storage_state_json, now))
-        conn.commit()
-    logger.debug(f"Saved session state for session '{session_id}' in SQLite.")
-
-
-def load_session_state(session_id: str, db_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """
-    Retrieves stored Playwright storage state dict for a given session_id.
-    Returns None if no session state exists.
-    """
-    if not db_path:
-        db_path = get_settings().SQLITE_DB_PATH
-    
-    with get_db_connection(db_path) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT storage_state_json FROM session_states WHERE session_id = ?", (session_id,))
-        row = cursor.fetchone()
-        if row and row["storage_state_json"]:
+    def _init_db(self):
+        """Initialize the SQLite schema."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS cache (
+                    key TEXT PRIMARY KEY,
+                    value TEXT,
+                    created_at REAL,
+                    ttl REAL,
+                    hit_count INTEGER DEFAULT 0,
+                    embedding TEXT,
+                    confidence REAL DEFAULT 0.8
+                )
+            ''')
+            # Migrations: add columns if missing (existing databases)
             try:
-                return json.loads(row["storage_state_json"])
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to decode storage state JSON for session '{session_id}': {e}")
-                return None
-    return None
+                conn.execute("ALTER TABLE cache ADD COLUMN embedding TEXT")
+            except sqlite3.OperationalError:
+                pass  # column already exists
+            try:
+                conn.execute("ALTER TABLE cache ADD COLUMN confidence REAL DEFAULT 0.8")
+            except sqlite3.OperationalError:
+                pass  # column already exists
+            conn.commit()
+
+    def get(self, key: str, default: Any = None) -> Optional[Any]:
+        """
+        Retrieve an item from the cache. Purges expired items at most once per 60 seconds.
+        Increments the hit count if the item is found.
+        """
+        now = time.time()
+        if now - self._last_purge >= self._PURGE_INTERVAL:
+            self.purge_expired()
+            self._last_purge = now
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "SELECT value, hit_count, confidence, created_at, ttl FROM cache WHERE key = ?", (key,)
+            )
+            row = cursor.fetchone()
+            if row:
+                value_str, hit_count, confidence, created_at, row_ttl = row
+                # Per-row TTL check: honour expiry even if bulk purge hasn't run yet
+                if time.time() > created_at + row_ttl:
+                    return default
+                # Increment hit_count
+                conn.execute("UPDATE cache SET hit_count = ? WHERE key = ?", (hit_count + 1, key))
+                conn.commit()
+                try:
+                    data = json.loads(value_str)
+                    if isinstance(data, dict):
+                        data["confidence"] = confidence
+                    return data
+                except (json.JSONDecodeError, TypeError):
+                    pass
+        return default
+
+    def set(self, key: str, value: Any, embedding: Optional[List[float]] = None):
+        """
+        Store an item in the cache with an optional structural embedding.
+        """
+        value_str = json.dumps(value)
+        embedding_str = json.dumps(embedding) if embedding is not None else None
+        created_at = time.time()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute('''
+                INSERT INTO cache (key, value, created_at, ttl, hit_count, embedding, confidence)
+                VALUES (?, ?, ?, ?, 0, ?, 0.8)
+                ON CONFLICT(key) DO UPDATE SET
+                    value=excluded.value,
+                    created_at=excluded.created_at,
+                    ttl=excluded.ttl,
+                    hit_count=0,
+                    embedding=excluded.embedding,
+                    confidence=0.8
+            ''', (key, value_str, created_at, self.ttl, embedding_str))
+            conn.commit()
+
+    def update_confidence(self, key: str, success: bool):
+        """
+        Adjust the confidence score of a page context cache entry based on success/failure.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("SELECT confidence FROM cache WHERE key = ?", (key,))
+            row = cursor.fetchone()
+            if row:
+                confidence = row[0]
+                if success:
+                    confidence = min(1.0, confidence + 0.05)
+                else:
+                    confidence = max(0.0, confidence - 0.3)
+                conn.execute("UPDATE cache SET confidence = ? WHERE key = ?", (confidence, key))
+                conn.commit()
+
+    def __setitem__(self, key: str, value: Any):
+        """
+        Store an item in the cache (dict-style, without embedding).
+        """
+        self.set(key, value)
+
+    def get_all_embeddings(self) -> List[Tuple[str, List[float], Any]]:
+        """
+        Retrieve all non-expired entries that have an embedding stored.
+
+        Returns:
+            List of (key, embedding, value) tuples.
+        """
+        self.purge_expired()
+        results = []
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "SELECT key, embedding, value, confidence FROM cache WHERE embedding IS NOT NULL"
+            )
+            for row in cursor.fetchall():
+                key, emb_str, val_str, confidence = row
+                try:
+                    embedding = json.loads(emb_str)
+                    value = json.loads(val_str)
+                    if isinstance(value, dict):
+                        value["confidence"] = confidence
+                    results.append((key, embedding, value))
+                except (json.JSONDecodeError, TypeError):
+                    continue
+        return results
+
+    def clear(self):
+        """
+        Clear all entries from the cache.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DELETE FROM cache")
+            conn.commit()
+
+    def purge_expired(self):
+        """
+        Remove entries that have exceeded their TTL.
+        """
+        current_time = time.time()
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("DELETE FROM cache WHERE created_at + ttl < ?", (current_time,))
+            deleted = cursor.rowcount
+            if deleted > 0:
+                logger.info(f"Purged {deleted} expired cache entries.")
+            conn.commit()
+
+class MacroStore:
+    """
+    Persistent storage for recorded action macros (Skill-level caching).
+    """
+    def __init__(self, db_path: str = "cache.db"):
+        self.db_path = db_path
+        self._init_db()
+
+    def _init_db(self):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS macros (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT,
+                    page_type TEXT,
+                    sequence TEXT,
+                    confidence REAL DEFAULT 0.8,
+                    success_count INTEGER DEFAULT 0,
+                    fail_count INTEGER DEFAULT 0
+                )
+            ''')
+            # Migration: alter macros table confidence default to 0.8 if already exists
+            # SQLite does not easily allow altering column defaults, but new rows can insert 0.8 explicitly.
+            conn.commit()
+
+    def save_macro(self, name: str, page_type: str, sequence: list) -> int:
+        sequence_str = json.dumps(sequence)
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute('''
+                INSERT INTO macros (name, page_type, sequence, confidence, success_count, fail_count)
+                VALUES (?, ?, ?, 0.8, 0, 0)
+            ''', (name, page_type, sequence_str))
+            conn.commit()
+            row_id = cursor.lastrowid
+            assert row_id is not None, "INSERT into macros failed to return a row ID"
+            return row_id
+
+    def list_macros(self, page_type: Optional[str] = None) -> list:
+        with sqlite3.connect(self.db_path) as conn:
+            if page_type:
+                cursor = conn.execute("SELECT id, name, page_type, sequence, confidence, success_count, fail_count FROM macros WHERE page_type = ?", (page_type,))
+            else:
+                cursor = conn.execute("SELECT id, name, page_type, sequence, confidence, success_count, fail_count FROM macros")
+            
+            rows = cursor.fetchall()
+            return [
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "page_type": r[2],
+                    "sequence": json.loads(r[3]),
+                    "confidence": r[4],
+                    "success_count": r[5],
+                    "fail_count": r[6]
+                }
+                for r in rows
+            ]
+
+    def get_macro(self, macro_id: int) -> Optional[dict]:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("SELECT id, name, page_type, sequence, confidence, success_count, fail_count FROM macros WHERE id = ?", (macro_id,))
+            row = cursor.fetchone()
+            if row:
+                return {
+                    "id": row[0],
+                    "name": row[1],
+                    "page_type": row[2],
+                    "sequence": json.loads(row[3]),
+                    "confidence": row[4],
+                    "success_count": row[5],
+                    "fail_count": row[6]
+                }
+        return None
+
+    def get_best_macro(self, page_type: str) -> Optional[dict]:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "SELECT id, name, page_type, sequence, confidence, success_count, fail_count "
+                "FROM macros WHERE page_type = ? ORDER BY confidence DESC, success_count DESC LIMIT 1", 
+                (page_type,)
+            )
+            row = cursor.fetchone()
+            if row:
+                return {
+                    "id": row[0],
+                    "name": row[1],
+                    "page_type": row[2],
+                    "sequence": json.loads(row[3]),
+                    "confidence": row[4],
+                    "success_count": row[5],
+                    "fail_count": row[6]
+                }
+        return None
+
+    def update_confidence(self, macro_id: int, success: bool):
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("SELECT confidence, success_count, fail_count FROM macros WHERE id = ?", (macro_id,))
+            row = cursor.fetchone()
+            if row:
+                confidence, success_count, fail_count = row
+                if success:
+                    success_count += 1
+                    confidence = min(1.0, confidence + 0.05)
+                else:
+                    fail_count += 1
+                    confidence = max(0.0, confidence - 0.3)
+                
+                conn.execute('''
+                    UPDATE macros
+                    SET confidence = ?, success_count = ?, fail_count = ?
+                    WHERE id = ?
+                ''', (confidence, success_count, fail_count, macro_id))
+                conn.commit()
 
 
-def delete_session_state(session_id: str, db_path: Optional[str] = None) -> None:
+class SessionReplayStore:
     """
-    Deletes the stored session state for a given session_id.
+    Persistent append-only log for lightweight session replays.
+    Logs each (timestamp, page_classification, action_taken, confidence_used, outcome) tuple.
     """
-    if not db_path:
-        db_path = get_settings().SQLITE_DB_PATH
-        
-    with get_db_connection(db_path) as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM session_states WHERE session_id = ?", (session_id,))
-        conn.commit()
-    logger.debug(f"Deleted session state for session '{session_id}' from SQLite.")
+    def __init__(self, db_path: str = "cache.db"):
+        self.db_path = db_path
+        self._init_db()
+
+    def _init_db(self):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS session_replay (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT,
+                    timestamp REAL,
+                    page_classification TEXT,
+                    action_taken TEXT,
+                    confidence_used REAL,
+                    outcome TEXT
+                )
+            ''')
+            conn.commit()
+
+    def log_event(self, session_id: str, page_classification: Optional[str], action_taken: str, confidence_used: Optional[float], outcome: str):
+        timestamp = time.time()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute('''
+                INSERT INTO session_replay (session_id, timestamp, page_classification, action_taken, confidence_used, outcome)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (session_id, timestamp, page_classification, action_taken, confidence_used, outcome))
+            conn.commit()
+
+    def get_replay(self, session_id: str) -> List[Dict[str, Any]]:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "SELECT timestamp, page_classification, action_taken, confidence_used, outcome "
+                "FROM session_replay WHERE session_id = ? ORDER BY id ASC", (session_id,)
+            )
+            rows = cursor.fetchall()
+            return [
+                {
+                    "timestamp": r[0],
+                    "page_classification": r[1],
+                    "action_taken": r[2],
+                    "confidence_used": r[3],
+                    "outcome": r[4]
+                }
+                for r in rows
+            ]
+
+    def clear_replay(self, session_id: str):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DELETE FROM session_replay WHERE session_id = ?", (session_id,))
+            conn.commit()
+
+    def clear_all(self):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DELETE FROM session_replay")
+            conn.commit()
 
 
 class SessionStateStore:
     """
-    OOP Wrapper for Session State operations.
+    Persistent store for browser context session states (cookies, localStorage, etc.).
     """
-    def __init__(self, db_path: Optional[str] = None):
-        self.db_path = db_path or get_settings().SQLITE_DB_PATH
-        init_db(self.db_path)
+    def __init__(self, db_path: str = "cache.db"):
+        self.db_path = db_path
+        self._init_db()
 
-    def save(self, session_id: str, storage_state: Dict[str, Any]) -> None:
-        save_session_state(session_id, storage_state, self.db_path)
+    def _init_db(self):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS session_states (
+                    session_id TEXT PRIMARY KEY,
+                    state_json TEXT,
+                    updated_at REAL
+                )
+            ''')
+            conn.commit()
 
-    def load(self, session_id: str) -> Optional[Dict[str, Any]]:
-        return load_session_state(session_id, self.db_path)
+    def save_state(self, session_id: str, state: Any):
+        state_json = json.dumps(state)
+        updated_at = time.time()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute('''
+                INSERT INTO session_states (session_id, state_json, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    state_json=excluded.state_json,
+                    updated_at=excluded.updated_at
+            ''', (session_id, state_json, updated_at))
+            conn.commit()
 
-    def delete(self, session_id: str) -> None:
-        delete_session_state(session_id, self.db_path)
+    def get_state(self, session_id: str) -> Optional[dict]:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("SELECT state_json FROM session_states WHERE session_id = ?", (session_id,))
+            row = cursor.fetchone()
+            if row:
+                try:
+                    return json.loads(row[0])
+                except json.JSONDecodeError:
+                    return None
+        return None
+
+    def clear_state(self, session_id: str):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DELETE FROM session_states WHERE session_id = ?", (session_id,))
+            conn.commit()
+
+
+macro_store = MacroStore()
+session_replay_store = SessionReplayStore()
+session_state_store = SessionStateStore()
+
+

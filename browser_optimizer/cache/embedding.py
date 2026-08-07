@@ -1,89 +1,156 @@
-import numpy as np
+"""
+Structural Embedding module.
+Generates lightweight feature vectors from page DOM structure (tag counts, class
+name fingerprints, DOM depth, attribute patterns) and provides brute-force cosine
+similarity search for near-duplicate detection.
+
+The embedding intentionally ignores text content — two pages with identical
+structure but different data (e.g. product A vs product B) should produce
+nearly identical embeddings.
+"""
+
+import math
+from typing import List, Tuple, Optional, Dict, Any
+from collections import Counter
+
 import xxhash
 from bs4 import BeautifulSoup
-from typing import List, Optional
+
+from browser_optimizer.utils.logger import logger
+
+# ─────────────────────────────────────────────────────────────
+# Feature dimensions
+# ─────────────────────────────────────────────────────────────
+
+# 30 common HTML tags whose normalised counts form the first part of the vector.
+TAG_VOCABULARY = [
+    "div", "span", "p", "a", "button", "input", "textarea", "select",
+    "option", "form", "label", "img", "table", "tr", "td", "th",
+    "ul", "ol", "li", "h1", "h2", "h3", "h4", "h5", "h6",
+    "section", "article", "nav", "main", "aside",
+]
+
+TAG_DIM = len(TAG_VOCABULARY)       # 30
+CLASS_BUCKETS = 32                  # hash-bucketed class-name distribution
+DEPTH_DIM = 2                       # max depth, mean depth
+ATTR_DIM = 4                        # count of elements with id / name / type / placeholder
+
+EMBEDDING_DIM = TAG_DIM + CLASS_BUCKETS + DEPTH_DIM + ATTR_DIM  # 68
+
 
 class StructuralEmbedding:
     """
-    Generates a 68-dimensional numerical feature vector from a DOM structure.
-    1. Tag Vocabulary Histogram (30 dimensions)
-    2. CSS Class Fingerprints (32 dimensions)
-    3. DOM Depth Statistics (2 dimensions)
-    4. Attribute Pattern Counts (4 dimensions)
+    Generates a fixed-length numerical vector that captures the *structure* of
+    an HTML page while ignoring its text content.
     """
 
-    COMMON_TAGS = [
-        "div", "span", "p", "a", "button", "input", "form", "ul", "li", "ol",
-        "h1", "h2", "h3", "h4", "h5", "h6", "table", "tr", "td", "th",
-        "select", "option", "textarea", "label", "img", "nav", "main", "header",
-        "footer", "section"
-    ]
+    # ── public API ──────────────────────────────────────────
 
-    @classmethod
-    def generate(cls, html: str) -> np.ndarray:
+    def generate(self, html: str) -> List[float]:
+        """
+        Build a structural embedding from raw HTML.
+
+        Args:
+            html: Raw HTML markup string.
+
+        Returns:
+            A list of floats of length ``EMBEDDING_DIM``.
+        """
         soup = BeautifulSoup(html, "lxml")
-        
-        # 1. Tag Vocabulary Histogram (30 dims)
-        tag_counts = np.zeros(30)
-        for i, tag in enumerate(cls.COMMON_TAGS):
-            tag_counts[i] = len(soup.find_all(tag))
-            
-        # 2. CSS Class Fingerprints (32 dims)
-        class_buckets = np.zeros(32)
-        for tag in soup.find_all(True):
-            classes = tag.get("class", [])
-            for c in classes:
-                h = xxhash.xxh32(c.encode("utf-8")).intdigest() % 32
-                class_buckets[h] += 1
-                
-        # 3. DOM Depth Statistics (2 dims)
-        def get_depth(element, current_depth=0):
-            if not hasattr(element, "children"):
-                return current_depth
-            children = [c for c in getattr(element, "children", []) if c.name is not None]
-            if not children:
-                return current_depth
-            return max(get_depth(c, current_depth + 1) for c in children)
+        all_tags = soup.find_all(True)  # every element node
 
-        max_depth = get_depth(soup)
-        
-        def sum_depth(element, current_depth=0):
-            if not hasattr(element, "children"):
-                return current_depth, 1
-            children = [c for c in getattr(element, "children", []) if c.name is not None]
-            if not children:
-                return current_depth, 1
-            total_d = current_depth
-            total_n = 1
-            for c in children:
-                d, n = sum_depth(c, current_depth + 1)
-                total_d += d
-                total_n += n
-            return total_d, total_n
-            
-        total_d, total_n = sum_depth(soup)
-        mean_depth = total_d / max(total_n, 1)
-        depth_stats = np.array([max_depth, mean_depth])
+        if not all_tags:
+            return [0.0] * EMBEDDING_DIM
 
-        # 4. Attribute Pattern Counts (4 dims)
-        id_count = len(soup.find_all(id=True))
-        name_count = len(soup.find_all(attrs={"name": True}))
-        type_count = len(soup.find_all(attrs={"type": True}))
-        placeholder_count = len(soup.find_all(attrs={"placeholder": True}))
-        attr_counts = np.array([id_count, name_count, type_count, placeholder_count])
+        tag_vec = self._tag_histogram(all_tags)
+        class_vec = self._class_fingerprint(all_tags)
+        depth_vec = self._dom_depth_stats(all_tags)
+        attr_vec = self._attribute_pattern_counts(all_tags)
 
-        # Concatenate features (30 + 32 + 2 + 4 = 68 dims)
-        vector = np.concatenate([tag_counts, class_buckets, depth_stats, attr_counts])
-
-        # 5. L2 Normalization
-        norm = np.linalg.norm(vector)
-        if norm > 0:
-            vector = vector / norm
-            
-        return vector
+        embedding = tag_vec + class_vec + depth_vec + attr_vec
+        return self._l2_normalise(embedding)
 
     @staticmethod
-    def cosine_similarity(v1: np.ndarray, v2: np.ndarray) -> float:
-        if v1 is None or v2 is None:
+    def cosine_similarity(a: List[float], b: List[float]) -> float:
+        """
+        Compute the cosine similarity between two vectors.
+
+        Returns:
+            A float in [-1, 1].  For our use-case the values are always ≥ 0
+            because all feature dimensions are non-negative.
+        """
+        dot = sum(x * y for x, y in zip(a, b))
+        mag_a = math.sqrt(sum(x * x for x in a))
+        mag_b = math.sqrt(sum(y * y for y in b))
+        if mag_a == 0.0 or mag_b == 0.0:
             return 0.0
-        return float(np.dot(v1, v2))
+        return dot / (mag_a * mag_b)
+
+    # ── feature extractors ──────────────────────────────────
+
+    def _tag_histogram(self, tags) -> List[float]:
+        """Normalised frequency of each tag in ``TAG_VOCABULARY``."""
+        counts = Counter(tag.name for tag in tags)
+        total = len(tags) or 1
+        return [counts.get(t, 0) / total for t in TAG_VOCABULARY]
+
+    def _class_fingerprint(self, tags) -> List[float]:
+        """
+        Hash every CSS class name into one of ``CLASS_BUCKETS`` bins.
+        The resulting histogram captures *which layout classes* are present
+        without being sensitive to their exact names.
+        """
+        buckets = [0.0] * CLASS_BUCKETS
+        total_classes = 0
+        for tag in tags:
+            classes = tag.get("class", [])
+            for cls in classes:
+                bucket = xxhash.xxh32(cls.encode("utf-8", errors="ignore")).intdigest() % CLASS_BUCKETS
+                buckets[bucket] += 1
+                total_classes += 1
+        # normalise
+        if total_classes > 0:
+            buckets = [b / total_classes for b in buckets]
+        return buckets
+
+    def _dom_depth_stats(self, tags) -> List[float]:
+        """Return [max_depth, mean_depth] of the DOM tree (normalised by 100)."""
+        depths = []
+        for tag in tags:
+            depth = len(list(tag.parents)) - 1  # subtract the [document] root
+            depths.append(max(depth, 0))
+        max_d = max(depths) if depths else 0
+        mean_d = sum(depths) / len(depths) if depths else 0
+        # normalise to keep scale comparable to the 0-1 histogram values
+        return [max_d / 100.0, mean_d / 100.0]
+
+    def _attribute_pattern_counts(self, tags) -> List[float]:
+        """
+        Count how many elements carry each of: id, name, type, placeholder.
+        Normalised by total element count.
+        """
+        total = len(tags) or 1
+        id_count = sum(1 for t in tags if t.get("id"))
+        name_count = sum(1 for t in tags if t.get("name"))
+        type_count = sum(1 for t in tags if t.get("type"))
+        placeholder_count = sum(1 for t in tags if t.get("placeholder"))
+        return [
+            id_count / total,
+            name_count / total,
+            type_count / total,
+            placeholder_count / total,
+        ]
+
+    # ── helpers ──────────────────────────────────────────────
+
+    @staticmethod
+    def _l2_normalise(vec: List[float]) -> List[float]:
+        """Unit-length normalisation so cosine similarity = dot product."""
+        mag = math.sqrt(sum(x * x for x in vec))
+        if mag == 0.0:
+            return vec
+        return [x / mag for x in vec]
+
+
+# Shared instance
+structural_embedding = StructuralEmbedding()
