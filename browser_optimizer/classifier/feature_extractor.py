@@ -8,7 +8,6 @@ from typing import Dict, Any, List
 from bs4 import BeautifulSoup, Tag
 from browser_optimizer.utils.logger import logger
 
-
 def _get_str_attr(tag: Any, attr_name: str) -> str:
     """Safely get a string attribute from a BeautifulSoup tag, handling list/tuple values and None."""
     if not isinstance(tag, Tag):
@@ -18,8 +17,7 @@ def _get_str_attr(tag: Any, attr_name: str) -> str:
         return ""
     if isinstance(val, (list, tuple)):
         return " ".join(val)
-    return str(val)
-
+    return val
 
 def _get_list_attr(tag: Any, attr_name: str) -> List[str]:
     """Safely get a list of string attributes from a BeautifulSoup tag."""
@@ -29,9 +27,8 @@ def _get_list_attr(tag: Any, attr_name: str) -> List[str]:
     if val is None:
         return []
     if isinstance(val, (list, tuple)):
-        return [str(v) for v in val]
-    return [str(val)]
-
+        return list(val)
+    return [val]
 
 # Exact columns in the trained model
 FEATURE_COLUMNS = [
@@ -67,7 +64,7 @@ FEATURE_COLUMNS = [
     "max_form_size",
     "submit_button_count",
     "title_length",
-    "visible_text_length",
+    "visible_text_length"
 ]
 
 
@@ -77,23 +74,16 @@ class FeatureExtractor:
     when BeautifulSoup is available and robust fallbacks when only compressed JSON is present.
     """
 
-    @classmethod
-    def extract_features(cls, context: Any, url: str = "") -> Dict[str, Any]:
+    def extract_features(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Extract the 33 feature dictionary from the page context or legacy (html, url) args.
+        Extract the 33 feature dictionary from the page context.
         
         Args:
-            context (Any): Page context dictionary or HTML string.
-            url (str): Target URL if context is provided as an HTML string.
+            context (Dict[str, Any]): Page context dictionary (containing ui, ax_tree, title, html, etc.)
             
         Returns:
             Dict[str, Any]: Feature names mapped to their numerical values.
         """
-        if isinstance(context, str):
-            context = {"html": context, "url": url}
-        elif not isinstance(context, dict):
-            context = {}
-
         features: Dict[str, Any] = {}
 
         # 1. Resolve soup if available
@@ -113,7 +103,7 @@ class FeatureExtractor:
         ax_tree = context.get("ax_tree") or ""
         title = context.get("title") or ""
         text_content = context.get("text_content") or ""
-        ctx_url = context.get("url") or url
+        url = context.get("url") or ""
 
         # Basic metadata lengths
         features["title_length"] = len(title)
@@ -138,12 +128,7 @@ class FeatureExtractor:
                 soup.find_all(
                     lambda t: t.name == "input"
                     and _get_str_attr(t, "type") != "password"
-                    and any(
-                        k in _get_str_attr(t, "id").lower()
-                        or k in _get_str_attr(t, "name").lower()
-                        or k in _get_str_attr(t, "placeholder").lower()
-                        for k in ["email"]
-                    )
+                    and any(k in _get_str_attr(t, "id").lower() or k in _get_str_attr(t, "name").lower() or k in _get_str_attr(t, "placeholder").lower() for k in ["email"])
                 )
             )
             features["checkbox_count"] = len(soup.find_all("input", type="checkbox"))
@@ -204,6 +189,7 @@ class FeatureExtractor:
         features["search_box_present"] = search_box
 
         # 5. Navbar, Footer, Sidebar, Modal presence
+        # Heuristics checking HTML class/id or AX tree keywords
         features["navbar_present"] = 0
         features["footer_present"] = 0
         features["sidebar_present"] = 0
@@ -219,6 +205,7 @@ class FeatureExtractor:
             if soup.find(lambda t: any(k in _get_str_attr(t, "id").lower() or any(k in c.lower() for c in _get_list_attr(t, "class")) for k in ["modal", "dialog", "popup"])):
                 features["modal_present"] = 1
         else:
+            # Check AX Tree and URL/Text keywords
             ax_lower = ax_tree.lower()
             if "navigation" in ax_lower or "navbar" in ax_lower or "header" in ax_lower or any("nav" in (el.get("id") or "").lower() for el in ui_elements):
                 features["navbar_present"] = 1
@@ -230,11 +217,14 @@ class FeatureExtractor:
                 features["modal_present"] = 1
 
         # 6. ARIA Statistics
+        # We estimate using AX tree lines and elements
         if soup is not None:
             features["aria_labels_count"] = len(soup.find_all(lambda t: t.has_attr("aria-label") or t.has_attr("aria-labelledby")))
             features["aria_buttons_count"] = len(soup.find_all(lambda t: t.get("role") == "button"))
             features["aria_roles_count"] = len(soup.find_all(lambda t: t.has_attr("role")))
         else:
+            # Compute from AX tree formatting
+            # Typically looks like:  - role "label" or role "name"
             features["aria_labels_count"] = len(re.findall(r'"[^"]+"', ax_tree))
             features["aria_buttons_count"] = len(re.findall(r"\bbutton\b", ax_tree, re.IGNORECASE))
             features["aria_roles_count"] = len(re.findall(r"-\s+\w+", ax_tree))
@@ -247,12 +237,13 @@ class FeatureExtractor:
                     inputs_in_form = len(form.find_all(["input", "select", "textarea", "button"]))
                     form_sizes.append(inputs_in_form)
             if form_sizes:
-                features["avg_form_size"] = float(sum(form_sizes)) / len(form_sizes)
+                features["avg_form_size"] = sum(form_sizes) / len(form_sizes)
                 features["max_form_size"] = max(form_sizes)
             else:
                 features["avg_form_size"] = 0.0
                 features["max_form_size"] = 0
         else:
+            # Flat list fallback: if we have form count > 0, estimate sizes
             if features["form_count"] > 0:
                 features["avg_form_size"] = float(features["input_count"] + features["button_count"]) / features["form_count"]
                 features["max_form_size"] = features["input_count"] + features["button_count"]
@@ -275,7 +266,8 @@ class FeatureExtractor:
         features["submit_button_count"] = submit_buttons
 
         # 9. Keyword Counts
-        text_fields = [title, text_content, ctx_url]
+        # Search page text + title + URL + element texts for key indicators
+        text_fields = [title, text_content, url]
         for el in ui_elements:
             text_fields.append(el.get("text") or "")
             text_fields.append(el.get("placeholder") or "")
@@ -299,6 +291,7 @@ class FeatureExtractor:
         )
 
         # 10. Prioritize explicitly pre-defined features from the context dictionary
+        # This allows test fixtures and mock predictions to override calculated values
         for col in FEATURE_COLUMNS:
             if col in context:
                 features[col] = context[col]
@@ -307,6 +300,7 @@ class FeatureExtractor:
         sorted_features = {}
         for col in FEATURE_COLUMNS:
             val = features.get(col, 0)
+            # Ensure proper numeric typing
             if col == "avg_form_size":
                 sorted_features[col] = float(val)
             else:

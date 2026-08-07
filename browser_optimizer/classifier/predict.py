@@ -4,17 +4,13 @@ Loads the trained LightGBM model and handles predictions with a confidence thres
 """
 
 import os
-try:
-    import joblib
-except ImportError:
-    import pickle as joblib
-
+import joblib
 import numpy as np
 import pandas as pd
 from typing import Dict, Any, Optional, Tuple
 from browser_optimizer.utils.logger import logger
 from browser_optimizer.classifier.feature_extractor import FeatureExtractor, FEATURE_COLUMNS
-from browser_optimizer.config.settings import get_settings
+from browser_optimizer.config.settings import settings
 
 
 class PageClassifierPredictor:
@@ -35,11 +31,14 @@ class PageClassifierPredictor:
         if cls._loaded:
             return
 
+        # Locate models folder relative to this package, or root
         possible_dirs = [
+            # Package path
             os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "page-classifier", "models")),
+            # Alternative package path (if directory structure is nested)
             os.path.abspath(os.path.join(os.path.dirname(__file__), "models")),
+            # Root project path
             os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "models")),
-            "models",
         ]
 
         models_dir = None
@@ -49,8 +48,9 @@ class PageClassifierPredictor:
                 break
 
         if not models_dir:
-            logger.warning(f"Could not locate page_classifier.pkl in any of: {possible_dirs}")
-            return
+            raise FileNotFoundError(
+                f"Could not locate page_classifier.pkl in any of: {possible_dirs}"
+            )
 
         logger.info(f"Loading page classifier models from: {models_dir}")
         try:
@@ -61,10 +61,10 @@ class PageClassifierPredictor:
             logger.info("Page classifier assets loaded successfully.")
         except Exception as e:
             logger.error(f"Failed to load page classifier assets: {e}")
+            raise
 
     def __init__(self):
         self.feature_extractor = FeatureExtractor()
-        self.settings = get_settings()
         self.load_assets()
 
     def predict(self, context: Dict[str, Any], threshold: Optional[float] = None) -> Tuple[str, float, Dict[str, float]]:
@@ -79,7 +79,8 @@ class PageClassifierPredictor:
             Tuple[str, float, Dict[str, float]]: (predicted_page_type, confidence_score, all_class_probabilities)
         """
         if threshold is None:
-            val = getattr(self.settings, "CLASSIFICATION_THRESHOLD", 0.65)
+            # Safely fetch setting, fall back to 0.65 if not defined on settings yet
+            val = getattr(settings, "CLASSIFICATION_THRESHOLD", 0.65)
             threshold = float(val) if val is not None else 0.65
 
         if self._model is None or self._label_encoder is None or self._feature_names is None:
@@ -90,6 +91,7 @@ class PageClassifierPredictor:
 
         # 2. Format features as a pandas DataFrame and align column order
         df_features = pd.DataFrame([features])
+        # Reorder columns based on training features list
         df_features = df_features[self._feature_names]
 
         # 3. Predict class probabilities
@@ -97,19 +99,23 @@ class PageClassifierPredictor:
             probs = self._model.predict_proba(df_features)[0]
         except Exception as e:
             logger.error(f"Inference failed: {e}")
+            # Safe fallback in case of prediction failure
             fallback = [0.0] * len(self._label_encoder.classes_)
             fallback[list(self._label_encoder.classes_).index("UNKNOWN")] = 1.0
             probs = np.array(fallback)
 
+        # Map classes to their probabilities
         classes = self._label_encoder.classes_
         class_probs = {str(classes[i]).lower(): float(probs[i]) for i in range(len(classes))}
 
+        # Get highest probability prediction
         best_idx = int(probs.argmax())
-        best_class = str(classes[best_idx]).lower()
+        best_class = str(classes[best_idx]).lower()  # Normalize to lowercase
         best_prob = float(probs[best_idx])
 
         logger.debug(f"Predicted class: {best_class} with confidence {best_prob:.4f}")
 
+        # 4. Confidence Threshold Fallback
         if best_prob < threshold:
             logger.info(
                 f"Prediction confidence {best_prob:.4f} is below threshold {threshold:.2f}. "

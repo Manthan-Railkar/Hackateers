@@ -165,4 +165,4 @@ class BrowserManager:
 
 
 # Shared manager instance
-manager = BrowserManager()
+manager = BrowserManager()

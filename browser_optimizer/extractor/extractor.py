@@ -1,79 +1,103 @@
-from typing import List, Optional, Tuple
-from bs4 import BeautifulSoup
-from playwright.async_api import Page
+"""
+Page data extraction module.
+Extracts HTML raw source, parses it via BeautifulSoup, and gets ARIA accessibility trees.
+"""
 
-from browser_optimizer.config.settings import get_settings
-from browser_optimizer.extractor.vision import VisionAnalyzer
-from browser_optimizer.schemas.schemas import UIElement
 from browser_optimizer.utils.logger import logger
+from browser_optimizer.config.settings import settings
+from browser_optimizer.extractor.vision import vision_analyzer
+from bs4 import BeautifulSoup
 
 
 class PageExtractor:
     """
-    Page Perception & Extraction Engine.
-    Extracts raw HTML, ARIA accessibility snapshots, and counts interactive tags.
-    Automatically triggers Multimodal Vision Fallback if interactive tag count < threshold.
+    Handles fetching raw text contents and semantic structure configurations from a Playwright Page.
     """
-    INTERACTIVE_TAGS = {"button", "input", "textarea", "select", "a", "form", "label"}
 
-    def __init__(self):
-        self.settings = get_settings()
-        self.vision_analyzer = VisionAnalyzer()
+    async def extract_html(self, page):
+        """
+        Extract the raw HTML source of the page.
+        
+        Args:
+            page (Page): Active Playwright page context.
+            
+        Returns:
+            str: Raw HTML markup string.
+        """
+        logger.info("Extracting HTML...")
+        html = await page.content()
+        return html
 
-    async def extract_html(self, page: Page) -> str:
+    def parse_html(self, html):
         """
-        Retrieves raw DOM HTML string from active Playwright Page.
+        Parse raw HTML content using BeautifulSoup and lxml parser.
+        
+        Args:
+            html (str): Raw HTML string.
+            
+        Returns:
+            BeautifulSoup: Parsed BeautifulSoup object.
         """
-        return await page.content()
+        soup = BeautifulSoup(html, "lxml")
+        return soup
 
-    def parse_html(self, html: str) -> BeautifulSoup:
+    async def extract_ax_tree(self, page):
         """
-        Parses HTML string into BeautifulSoup DOM tree.
+        Generate the ARIA accessibility tree structure (snapshot) of the page body.
+        
+        Args:
+            page (Page): Active Playwright page context.
+            
+        Returns:
+            str: YAML-like ARIA snapshot string, or None if failed.
         """
+        logger.info("Extracting Accessibility Tree...")
         try:
-            return BeautifulSoup(html, "lxml")
-        except Exception:
-            return BeautifulSoup(html, "html.parser")
-
-    async def extract_ax_tree(self, page: Page) -> Optional[str]:
-        """
-        Retrieves semantic ARIA accessibility snapshot tree via Playwright locator.
-        """
-        try:
-            ax_snapshot = await page.locator("body").aria_snapshot()
-            return ax_snapshot
+            ax_tree = await page.locator("body").aria_snapshot()
+            return ax_tree
         except Exception as e:
             logger.warning(f"Failed to extract ARIA snapshot: {e}")
             return None
 
-    def count_interactive_elements(self, soup: BeautifulSoup) -> int:
+    async def extract(self, page):
         """
-        Counts the total number of interactive tags in parsed DOM.
+        Run the complete extraction pipeline on a page, with visual fallback if DOM elements are insufficient.
+        
+        Args:
+            page (Page): Active Playwright page context.
+            
+        Returns:
+            dict: Package containing BeautifulSoup parsed DOM, ARIA snapshot, url, title, and visual fallback elements.
         """
-        count = 0
-        for tag in soup.find_all(self.INTERACTIVE_TAGS):
-            count += 1
-        return count
-
-    async def extract_page_data(self, page: Page) -> Tuple[str, BeautifulSoup, Optional[str], List[UIElement]]:
-        """
-        Main extraction entry point.
-        Retrieves raw HTML, ARIA snapshot, parses DOM, checks interactive tag threshold,
-        and invokes Multimodal Vision Analyzer if interactive tags < VISUAL_FALLBACK_THRESHOLD.
-        """
-        raw_html = await self.extract_html(page)
-        soup = self.parse_html(raw_html)
+        html = await self.extract_html(page)
+        soup = self.parse_html(html)
         ax_tree = await self.extract_ax_tree(page)
 
-        interactive_count = self.count_interactive_elements(soup)
-        logger.info(f"Page extracted. Interactive DOM tags count: {interactive_count}")
+        # Check interactive element count in DOM
+        important_tags = {"button", "input", "textarea", "select", "label", "form", "a"}
+        interactive_count = len(soup.find_all(important_tags)) if soup else 0
 
-        visual_elements: List[UIElement] = []
-        if interactive_count < self.settings.VISUAL_FALLBACK_THRESHOLD:
+        visual_elements = []
+        is_visual_fallback = False
+
+        if interactive_count < settings.VISUAL_FALLBACK_THRESHOLD:
             logger.warning(
-                f"Interactive DOM tag count ({interactive_count}) below threshold "
-                f"({self.settings.VISUAL_FALLBACK_THRESHOLD}). Triggering Vision Analyzer."
+                f"Interactive element count ({interactive_count}) below threshold ({settings.VISUAL_FALLBACK_THRESHOLD}). "
+                "Triggering visual fallback..."
             )
-            visual_elements = await self.vision_analyzer.capture_and_analyze(page)
+            visual_elements = await vision_analyzer.capture_and_analyze(page)
+            is_visual_fallback = True
 
-        return raw_html, soup, ax_tree, visual_elements
+        return {
+            "html": soup,
+            "ax_tree": ax_tree,
+            "raw_html_length": len(html),
+            "url": getattr(page, "url", ""),
+            "title": await page.title() if hasattr(page, "title") else "",
+            "visual_elements": visual_elements,
+            "is_visual_fallback": is_visual_fallback
+        }
+
+
+# Shared extractor instance
+extractor = PageExtractor()

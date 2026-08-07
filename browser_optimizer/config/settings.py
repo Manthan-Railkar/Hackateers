@@ -1,39 +1,37 @@
-from functools import lru_cache
-from typing import Optional
-from pydantic_settings import BaseSettings, SettingsConfigDict
+"""
+Configuration settings module for the Browser Optimizer MCP.
+Loads environment variables from .env file and sets defaults.
+"""
+
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 
 
-class Settings(BaseSettings):
+class Settings:
     """
-    Centralized configuration settings for Browser Optimizer MCP.
-    Loads environment variables with fallback defaults.
+    Settings container managing settings values loaded from env.
+    Provides sane defaults for logging, browser execution, caching, and timeouts.
     """
-    LOG_LEVEL: str = "INFO"
-    HEADLESS: bool = True
-    CACHE_ENABLED: bool = True
-    CACHE_TTL: int = 300
-    CACHE_MAX_SIZE: int = 100
-    BROWSER_TIMEOUT: int = 30000
-    SIMILARITY_THRESHOLD: float = 0.9
-    CLASSIFICATION_THRESHOLD: float = 0.65
-    WEBSOCKET_HOST: str = "localhost"
-    WEBSOCKET_PORT: int = 8765
-    DASHBOARD_PORT: int = 8050
-    VISUAL_FALLBACK_THRESHOLD: int = 3
-    GROQ_API_KEY: Optional[str] = None
-    GROQ_VISION_MODEL: str = "llama-3.2-11b-vision-preview"
-    SQLITE_DB_PATH: str = "cache.db"
-
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore"
-    )
+    LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+    HEADLESS = os.getenv("HEADLESS", "True") == "True"
+    CACHE_ENABLED = os.getenv("CACHE_ENABLED", "True") == "True"
+    CACHE_TTL = int(os.getenv("CACHE_TTL", "300"))
+    CACHE_MAX_SIZE = int(os.getenv("CACHE_MAX_SIZE", "100"))
+    REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+    BROWSER_TIMEOUT = int(os.getenv("BROWSER_TIMEOUT", "30000"))
+    SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.9"))
+    CLASSIFICATION_THRESHOLD = float(os.getenv("CLASSIFICATION_THRESHOLD", "0.65"))
+    WEBSOCKET_HOST = os.getenv("WEBSOCKET_HOST", "localhost")
+    WEBSOCKET_PORT = int(os.getenv("WEBSOCKET_PORT", "8765"))
+    DASHBOARD_PORT = int(os.getenv("DASHBOARD_PORT", "8050"))
+    AUTO_OPEN_DASHBOARD = os.getenv("AUTO_OPEN_DASHBOARD", "True") == "True"
+    VISUAL_FALLBACK_THRESHOLD = int(os.getenv("VISUAL_FALLBACK_THRESHOLD", "3"))
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+    GROQ_VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "llama-3.2-11b-vision-preview")
 
 
-@lru_cache()
-def get_settings() -> Settings:
-    """
-    Returns a cached instance of system settings.
-    """
-    return Settings()
+
+# Instantiated settings for export
+settings = Settings()

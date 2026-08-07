@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Dict, List, Any, Optional, Tuple, Iterator
+from typing import Dict, List, Any, Optional
 from browser_optimizer.utils.logger import logger
 from browser_optimizer.classifier.predict import PageClassifierPredictor
 
@@ -21,16 +21,6 @@ class PageType(str, Enum):
     DASHBOARD = "dashboard"
 
 
-class ClassifyResult(dict):
-    """
-    Dictionary subclass holding classification results ('page_type', 'scores').
-    Supports 2-tuple unpacking (page_type, scores) for backward compatibility.
-    """
-    def __iter__(self) -> Iterator[Any]:
-        yield self.get("page_type", PageType.UNKNOWN.value)
-        yield self.get("scores", {})
-
-
 class TaskClassifier:
     """
     LightGBM-based Machine Learning page classifier.
@@ -49,25 +39,16 @@ class TaskClassifier:
             logger.error(f"Failed to initialize ML PageClassifierPredictor: {e}")
             self._predictor = None
 
-    def classify(self, context_or_html: Any, url: str = "") -> ClassifyResult:
+    def classify(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Classifies the page type based on the provided context dictionary or HTML string.
+        Classifies the page type based on the provided context dictionary.
         
         Args:
-            context_or_html (Any): Webpage context dictionary or HTML string.
-            url (str): Target URL if context is provided as HTML string.
+            context (Dict[str, Any]): Webpage context dictionary.
             
         Returns:
-            ClassifyResult: Dict containing predicted 'page_type' and class 'scores',
-                            unpackable as `page_type, scores = classifier.classify(...)`.
+            Dict[str, Any]: Dict containing predicted 'page_type' and class 'scores'.
         """
-        if isinstance(context_or_html, str):
-            context = {"html": context_or_html, "url": url}
-        elif isinstance(context_or_html, dict):
-            context = context_or_html
-        else:
-            context = {}
-
         if not self._predictor:
             logger.warning("Predictor not loaded. Falling back to heuristic classifier.")
             return self._classify_heuristics(context)
@@ -85,38 +66,36 @@ class TaskClassifier:
             if page_type == PageType.UNKNOWN or best_class == "unknown":
                 logger.info("ML classification confidence below threshold or unknown. Invoking heuristic fallback classifier...")
                 heuristic_result = self._classify_heuristics(context)
-                if heuristic_result.get("page_type") != PageType.UNKNOWN.value and heuristic_result.get("page_type") != PageType.UNKNOWN:
+                if heuristic_result["page_type"] != PageType.UNKNOWN:
                     logger.info(f"Heuristic fallback classifier matched category: {heuristic_result['page_type']}")
-                    h_scores = {}
-                    for k, v in heuristic_result.get("scores", {}).items():
-                        try:
-                            h_scores[PageType(k).value] = float(v)
-                        except ValueError:
-                            h_scores[str(k)] = float(v)
+                    h_scores = {PageType(k): float(v) for k, v in heuristic_result["scores"].items()}
                     sum_scores = sum(h_scores.values())
                     if sum_scores > 0:
                         norm_scores = {k: v / sum_scores for k, v in h_scores.items()}
                     else:
                         norm_scores = {}
+                    # Ensure we set a reasonable high probability for the predicted category
                     norm_scores[heuristic_result["page_type"]] = 0.8
-                    norm_scores[PageType.UNKNOWN.value] = 0.2
-                    return ClassifyResult({
+                    norm_scores[PageType.UNKNOWN] = 0.2
+                    return {
                         "page_type": heuristic_result["page_type"],
                         "scores": norm_scores
-                    })
+                    }
 
+            # Build scores dict mapped to PageType enum values
             scores = {}
             for name, prob in class_probs.items():
                 try:
-                    p_type = PageType(name).value
+                    p_type = PageType(name)
                     scores[p_type] = prob
                 except ValueError:
-                    scores[str(name)] = prob
+                    # Ignore classes that are not mapped in PageType enum
+                    pass
 
-            return ClassifyResult({
-                "page_type": page_type.value,
+            return {
+                "page_type": page_type,
                 "scores": scores
-            })
+            }
 
         except Exception as e:
             logger.error(f"Inference error during classify: {e}")
@@ -125,12 +104,12 @@ class TaskClassifier:
                 return self._classify_heuristics(context)
             except Exception as he:
                 logger.error(f"Heuristic classifier also failed: {he}")
-                return ClassifyResult({
-                    "page_type": PageType.UNKNOWN.value,
-                    "scores": {PageType.UNKNOWN.value: 1.0}
-                })
+                return {
+                    "page_type": PageType.UNKNOWN,
+                    "scores": {PageType.UNKNOWN: 1.0}
+                }
 
-    def _classify_heuristics(self, context: Dict[str, Any]) -> ClassifyResult:
+    def _classify_heuristics(self, context: Dict[str, Any]) -> Dict[str, Any]:
         from collections import Counter
         ui = context.get("ui", [])
 
@@ -156,12 +135,10 @@ class TaskClassifier:
         if scores[best] == 0:
             best = PageType.UNKNOWN
 
-        norm_scores = {k.value: float(v) for k, v in scores.items()}
-
-        return ClassifyResult({
-            "page_type": best.value if isinstance(best, Enum) else str(best),
-            "scores": norm_scores
-        })
+        return {
+            "page_type": best,
+            "scores": dict(scores)
+        }
 
     # --------------------------------------------------------
     # LOGIN
