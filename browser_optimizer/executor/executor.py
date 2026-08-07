@@ -125,6 +125,18 @@ class RuleBasedExecutor:
         except Exception:
             pass
 
+        # Automatic checkpointing hook after successful action execution
+        if result.get("success"):
+            try:
+                from browser_optimizer.recovery.manager import recovery_manager
+                await recovery_manager.create_checkpoint(
+                    page,
+                    session_id=session_id,
+                    action_trigger=f"action:{action}"
+                )
+            except Exception as e:
+                logger.debug(f"Automatic action checkpoint skipped: {e}")
+
         return result
 
 # Shared executor instance

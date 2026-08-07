@@ -13,6 +13,16 @@ class MetricsTracker:
         self.actions_executed = 0
         self.total_requests = 0
 
+        # LLMS Discovery & Direct Fetch Metrics
+        self.total_llms_discoveries = 0
+        self.discovery_hits = 0
+        self.discovery_misses = 0
+        self.browser_launches_avoided = 0
+        self.direct_fetch_count = 0
+        self.hybrid_execution_count = 0
+        self.fallback_count = 0
+        self.total_latency_saved_ms = 0.0
+
     def record_compression(self, raw_size: int, compressed_size: int):
         with self._lock:
             self.raw_html_bytes += raw_size
@@ -43,6 +53,30 @@ class MetricsTracker:
             self.semantic_hits += 1
             logger.info("[METRICS] Semantic cache HIT recorded")
 
+    def record_llms_discovery(self, success: bool, avoided_browser: bool = False):
+        with self._lock:
+            self.total_llms_discoveries += 1
+            if success:
+                self.discovery_hits += 1
+            else:
+                self.discovery_misses += 1
+
+            if avoided_browser:
+                self.browser_launches_avoided += 1
+
+    def record_direct_fetch(self, latency_saved_ms: float = 0.0):
+        with self._lock:
+            self.direct_fetch_count += 1
+            self.total_latency_saved_ms += max(0.0, latency_saved_ms)
+
+    def record_hybrid_execution(self):
+        with self._lock:
+            self.hybrid_execution_count += 1
+
+    def record_browser_fallback(self):
+        with self._lock:
+            self.fallback_count += 1
+
     def get_stats(self) -> Dict[str, Any]:
         with self._lock:
             total_saved = self.raw_html_bytes - self.compressed_bytes
@@ -51,6 +85,8 @@ class MetricsTracker:
             cache_total = self.cache_hits + self.cache_misses + self.semantic_hits
             hit_rate = round((self.cache_hits / cache_total) * 100, 1) if cache_total > 0 else 0
             semantic_rate = round((self.semantic_hits / cache_total) * 100, 1) if cache_total > 0 else 0
+
+            discovery_success_rate = round((self.discovery_hits / self.total_llms_discoveries) * 100, 1) if self.total_llms_discoveries > 0 else 0
 
             return {
                 "total_requests": self.total_requests,
@@ -63,7 +99,18 @@ class MetricsTracker:
                 "cache_misses": self.cache_misses,
                 "cache_hit_rate_pct": hit_rate,
                 "semantic_hit_rate_pct": semantic_rate,
-                "actions_executed": self.actions_executed
+                "actions_executed": self.actions_executed,
+                "llms_discovery": {
+                    "total_discoveries": self.total_llms_discoveries,
+                    "discovery_hits": self.discovery_hits,
+                    "discovery_misses": self.discovery_misses,
+                    "discovery_success_rate_pct": discovery_success_rate,
+                    "browser_launches_avoided": self.browser_launches_avoided,
+                    "direct_fetch_count": self.direct_fetch_count,
+                    "hybrid_execution_count": self.hybrid_execution_count,
+                    "fallback_count": self.fallback_count,
+                    "total_latency_saved_ms": round(self.total_latency_saved_ms, 2)
+                }
             }
 
 metrics = MetricsTracker()

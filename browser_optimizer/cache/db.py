@@ -393,8 +393,292 @@ class SessionStateStore:
             conn.commit()
 
 
+class DOMCheckpointDB:
+    """
+    Persistent store for DOM Checkpoints in SQLite table 'dom_checkpoints'.
+    Supports fast queries indexed by session_id, timestamp, and dom_hash.
+    Enforces checkpoint retention limits per session and automatic age pruning.
+    """
+    def __init__(self, db_path: str = "cache.db"):
+        self.db_path = db_path
+        self._init_db()
+
+    def _init_db(self):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS dom_checkpoints (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT,
+                    url TEXT,
+                    title TEXT,
+                    compressed_dom TEXT,
+                    dom_hash TEXT,
+                    scroll_x INTEGER DEFAULT 0,
+                    scroll_y INTEGER DEFAULT 0,
+                    viewport_width INTEGER DEFAULT 1280,
+                    viewport_height INTEGER DEFAULT 720,
+                    focused_element TEXT,
+                    timestamp REAL,
+                    version TEXT DEFAULT '1.0',
+                    metadata TEXT
+                )
+            ''')
+            # Create indexes for fast lookup and pruning
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_checkpoints_session ON dom_checkpoints(session_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_checkpoints_timestamp ON dom_checkpoints(timestamp)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_checkpoints_dom_hash ON dom_checkpoints(dom_hash)")
+            conn.commit()
+
+    def save_checkpoint(self, checkpoint_data: dict, max_checkpoints: int = 20, retention_days: int = 7) -> int:
+        """
+        Store a new DOM checkpoint record and automatically prune old entries.
+        """
+        session_id = checkpoint_data.get("session_id", "default")
+        url = checkpoint_data.get("url", "")
+        title = checkpoint_data.get("page_title") or checkpoint_data.get("title") or ""
+        compressed_dom_str = json.dumps(checkpoint_data.get("compressed_dom") or {})
+        dom_hash = checkpoint_data.get("dom_hash", "")
+        scroll_x = int(checkpoint_data.get("scroll_x", 0))
+        scroll_y = int(checkpoint_data.get("scroll_y", 0))
+        viewport_width = int(checkpoint_data.get("viewport_width", 1280))
+        viewport_height = int(checkpoint_data.get("viewport_height", 720))
+        focused_element = checkpoint_data.get("focused_element")
+        timestamp = float(checkpoint_data.get("timestamp", time.time()))
+        version = checkpoint_data.get("checkpoint_version") or checkpoint_data.get("version") or "1.0"
+        metadata_str = json.dumps(checkpoint_data.get("metadata") or {})
+
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute('''
+                INSERT INTO dom_checkpoints (
+                    session_id, url, title, compressed_dom, dom_hash,
+                    scroll_x, scroll_y, viewport_width, viewport_height,
+                    focused_element, timestamp, version, metadata
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                session_id, url, title, compressed_dom_str, dom_hash,
+                scroll_x, scroll_y, viewport_width, viewport_height,
+                focused_element, timestamp, version, metadata_str
+            ))
+            conn.commit()
+            checkpoint_id = cursor.lastrowid or 0
+
+        # Perform retention pruning
+        self.prune_checkpoints(session_id, max_checkpoints=max_checkpoints, max_age_days=retention_days)
+        return checkpoint_id
+
+    def _row_to_dict(self, row: Tuple) -> dict:
+        (
+            c_id, session_id, url, title, compressed_dom_str, dom_hash,
+            scroll_x, scroll_y, viewport_width, viewport_height,
+            focused_element, timestamp, version, metadata_str
+        ) = row
+
+        try:
+            compressed_dom = json.loads(compressed_dom_str)
+        except Exception:
+            compressed_dom = {}
+
+        try:
+            metadata = json.loads(metadata_str)
+        except Exception:
+            metadata = {}
+
+        return {
+            "checkpoint_id": c_id,
+            "session_id": session_id,
+            "url": url,
+            "page_title": title,
+            "compressed_dom": compressed_dom,
+            "dom_hash": dom_hash,
+            "scroll_x": scroll_x,
+            "scroll_y": scroll_y,
+            "viewport_width": viewport_width,
+            "viewport_height": viewport_height,
+            "focused_element": focused_element,
+            "timestamp": timestamp,
+            "checkpoint_version": version,
+            "metadata": metadata
+        }
+
+    def get_latest_checkpoint(self, session_id: str = "default") -> Optional[dict]:
+        """
+        Fetch the most recent checkpoint for a given session ID.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute('''
+                SELECT id, session_id, url, title, compressed_dom, dom_hash,
+                       scroll_x, scroll_y, viewport_width, viewport_height,
+                       focused_element, timestamp, version, metadata
+                FROM dom_checkpoints
+                WHERE session_id = ?
+                ORDER BY timestamp DESC, id DESC
+                LIMIT 1
+            ''', (session_id,))
+            row = cursor.fetchone()
+            if row:
+                return self._row_to_dict(row)
+        return None
+
+    def get_checkpoint_by_id(self, checkpoint_id: int) -> Optional[dict]:
+        """
+        Fetch a specific checkpoint by primary key ID.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute('''
+                SELECT id, session_id, url, title, compressed_dom, dom_hash,
+                       scroll_x, scroll_y, viewport_width, viewport_height,
+                       focused_element, timestamp, version, metadata
+                FROM dom_checkpoints
+                WHERE id = ?
+            ''', (checkpoint_id,))
+            row = cursor.fetchone()
+            if row:
+                return self._row_to_dict(row)
+        return None
+
+    def list_checkpoints(self, session_id: str = "default", limit: int = 20) -> List[dict]:
+        """
+        List recent checkpoints for a session ordered by timestamp descending.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute('''
+                SELECT id, session_id, url, title, compressed_dom, dom_hash,
+                       scroll_x, scroll_y, viewport_width, viewport_height,
+                       focused_element, timestamp, version, metadata
+                FROM dom_checkpoints
+                WHERE session_id = ?
+                ORDER BY timestamp DESC, id DESC
+                LIMIT ?
+            ''', (session_id, limit))
+            rows = cursor.fetchall()
+            return [self._row_to_dict(r) for r in rows]
+
+    def delete_session_checkpoints(self, session_id: str):
+        """
+        Delete all checkpoints associated with a session ID.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DELETE FROM dom_checkpoints WHERE session_id = ?", (session_id,))
+            conn.commit()
+
+    def prune_checkpoints(self, session_id: str, max_checkpoints: int = 20, max_age_days: int = 7):
+        """
+        Prune checkpoints exceeding max_checkpoints count or max_age_days threshold for a session.
+        """
+        cutoff_timestamp = time.time() - (max_age_days * 86400)
+        with sqlite3.connect(self.db_path) as conn:
+            # Delete expired by age
+            conn.execute(
+                "DELETE FROM dom_checkpoints WHERE session_id = ? AND timestamp < ?",
+                (session_id, cutoff_timestamp)
+            )
+            # Delete excess beyond max_checkpoints count
+            cursor = conn.execute('''
+                SELECT id FROM dom_checkpoints
+                WHERE session_id = ?
+                ORDER BY timestamp DESC, id DESC
+                LIMIT -1 OFFSET ?
+            ''', (session_id, max_checkpoints))
+            old_ids = [r[0] for r in cursor.fetchall()]
+            if old_ids:
+                placeholders = ",".join("?" for _ in old_ids)
+                conn.execute(f"DELETE FROM dom_checkpoints WHERE id IN ({placeholders})", old_ids)
+            conn.commit()
+
+
+class LLMSCacheDB:
+    """
+    Persistent SQLite storage for llms.txt discovery payloads, parsed schemas,
+    ETags, and HTTP Last-Modified headers.
+    """
+    def __init__(self, db_path: str = "cache.db"):
+        self.db_path = db_path
+        self._init_db()
+
+    def _init_db(self):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS llms_cache (
+                    hostname TEXT PRIMARY KEY,
+                    fetched_at REAL,
+                    expires_at REAL,
+                    version TEXT,
+                    raw_content TEXT,
+                    parsed_json TEXT,
+                    etag TEXT,
+                    last_modified TEXT
+                )
+            ''')
+            conn.commit()
+
+    def save_llms_cache(
+        self,
+        hostname: str,
+        raw_content: str,
+        parsed_dict: dict,
+        etag: Optional[str] = None,
+        last_modified: Optional[str] = None,
+        version: Optional[str] = None,
+        ttl: int = 86400
+    ):
+        fetched_at = time.time()
+        expires_at = fetched_at + ttl
+        parsed_json = json.dumps(parsed_dict)
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute('''
+                INSERT INTO llms_cache (
+                    hostname, fetched_at, expires_at, version, raw_content, parsed_json, etag, last_modified
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(hostname) DO UPDATE SET
+                    fetched_at=excluded.fetched_at,
+                    expires_at=excluded.expires_at,
+                    version=excluded.version,
+                    raw_content=excluded.raw_content,
+                    parsed_json=excluded.parsed_json,
+                    etag=excluded.etag,
+                    last_modified=excluded.last_modified
+            ''', (hostname, fetched_at, expires_at, version, raw_content, parsed_json, etag, last_modified))
+            conn.commit()
+
+    def get_llms_cache(self, hostname: str) -> Optional[dict]:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute('''
+                SELECT hostname, fetched_at, expires_at, version, raw_content, parsed_json, etag, last_modified
+                FROM llms_cache
+                WHERE hostname = ?
+            ''', (hostname,))
+            row = cursor.fetchone()
+            if row:
+                h_name, fetched_at, expires_at, version, raw_content, parsed_str, etag, last_modified = row
+                try:
+                    parsed = json.loads(parsed_str)
+                except Exception:
+                    parsed = {}
+
+                return {
+                    "hostname": h_name,
+                    "fetched_at": fetched_at,
+                    "expires_at": expires_at,
+                    "is_expired": time.time() > expires_at,
+                    "version": version,
+                    "raw_content": raw_content,
+                    "parsed": parsed,
+                    "etag": etag,
+                    "last_modified": last_modified
+                }
+        return None
+
+    def invalidate_cache(self, hostname: str):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DELETE FROM llms_cache WHERE hostname = ?", (hostname,))
+            conn.commit()
+
+
 macro_store = MacroStore()
 session_replay_store = SessionReplayStore()
 session_state_store = SessionStateStore()
+dom_checkpoint_db = DOMCheckpointDB()
+llms_cache_db = LLMSCacheDB()
 
 

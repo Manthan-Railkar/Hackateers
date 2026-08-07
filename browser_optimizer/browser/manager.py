@@ -93,13 +93,18 @@ class BrowserManager:
         """
         Retrieve the page context for the specified session_id.
         Creates a new context and page if none exists, or if the page has been closed.
+        Automatically handles browser process restarts if disconnected.
         
         Returns:
             Page: Isolated Playwright page object ready for automation.
         """
+        # Ensure browser is connected if real browser instance
+        if self.browser is None or (hasattr(self.browser, "is_connected") and not self.browser.is_connected()):
+            logger.warning("Browser instance disconnected or not started. Restarting Chromium...")
+            self.browser = None
+            await self.start()
+
         if session_id not in self.sessions or self.sessions[session_id][1].is_closed():
-            if self.browser is None:
-                raise RuntimeError("Browser not started. Call start() first.")
             logger.info(f"Initializing new isolated BrowserContext for session: {session_id}")
             
             state: Any = None
@@ -121,6 +126,7 @@ class BrowserManager:
     async def navigate(self, url: str, session_id: str = "default"):
         """
         Navigate to a specific URL and wait for DOM load completion in the given session.
+        Automatically creates a DOM checkpoint post-navigation.
         
         Args:
             url (str): Target web application link.
@@ -133,6 +139,14 @@ class BrowserManager:
         await page.goto(url, timeout=settings.BROWSER_TIMEOUT, wait_until="domcontentloaded")
         await self.save_session_state(session_id)
         await live_screenshot_store.capture(page, session_id, f"Navigated to {url}")
+        
+        # Automatic checkpointing hook post-navigation
+        try:
+            from browser_optimizer.recovery.manager import recovery_manager
+            await recovery_manager.create_checkpoint(page, session_id, action_trigger="navigate")
+        except Exception as e:
+            logger.debug(f"Automatic navigation checkpoint skipped: {e}")
+            
         return page
 
     async def save_session_state(self, session_id: str):

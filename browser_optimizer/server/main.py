@@ -23,6 +23,8 @@ from browser_optimizer.executor.executor import executor as action_executor
 from browser_optimizer.metrics.metrics import metrics
 from browser_optimizer.dashboard.server import start_dashboard_server
 from browser_optimizer.schemas.schemas import ReplayHandlePayload
+from browser_optimizer.recovery.manager import recovery_manager
+from browser_optimizer.discovery.manager import llms_discovery_manager
 
 
 # ─────────────────────────────────────────────────────────────
@@ -242,6 +244,15 @@ async def extract_context(url: str, session_id: str = "default") -> Dict[str, An
     """
     await ensure_initialized()
     try:
+        # Check LLMS Discovery decision engine for DIRECT_FETCH strategy
+        strategy_res = await llms_discovery_manager.select_navigation_strategy(url)
+        if strategy_res.strategy == "DIRECT_FETCH":
+            try:
+                direct_result = await llms_discovery_manager.direct_fetch(url)
+                return _complete_result(direct_result)
+            except Exception as df_err:
+                logger.warning(f"Direct Fetch failed for '{url}': {df_err}. Falling back to Playwright...")
+
         # 1. Get page and check cache if enabled
         page = await manager.get_page(session_id)
 
@@ -466,6 +477,39 @@ async def execute_action(
             confidence_used=None,
             outcome=f"error: {str(e)}"
         )
+        
+        # Check if failure is a recoverable browser/network issue
+        is_recoverable, category, desc = recovery_manager.detect_failure(e)
+        if is_recoverable:
+            logger.warning(f"Recoverable failure detected ({category}): {desc}. Attempting automatic recovery...")
+            recovery_report = await recovery_manager.restore_checkpoint(session_id=session_id, browser_manager=manager)
+            if recovery_report.get("auto_resumed"):
+                try:
+                    logger.info("Auto-resume successful. Retrying execute_action...")
+                    page = await manager.get_page(session_id)
+                    retry_result = await action_executor.execute(page, action, selector, value, session_id=session_id)
+                    return _complete_result({
+                        **retry_result,
+                        "recovered_from_failure": True,
+                        "recovery_report": recovery_report
+                    })
+                except Exception as retry_err:
+                    logger.error(f"Action retry after recovery failed: {retry_err}")
+                    return _complete_result({
+                        "success": False,
+                        "error": str(e),
+                        "recovered_from_failure": True,
+                        "retry_error": str(retry_err),
+                        "recovery_report": recovery_report
+                    })
+            else:
+                return _complete_result({
+                    "success": False,
+                    "error": str(e),
+                    "recovered_from_failure": False,
+                    "recovery_report": recovery_report
+                })
+                
         return _complete_result({"success": False, "error": str(e)})
 
 
@@ -902,6 +946,201 @@ async def close_session(session_id: str) -> Dict[str, Any]:
     """
     await manager.close_session(session_id)
     return _complete_result({"success": True, "message": f"Session '{session_id}' has been closed."})
+
+
+# ═════════════════════════════════════════════════════════════
+# DOM Checkpointing & Recovery MCP Tools
+# ═════════════════════════════════════════════════════════════
+
+@mcp.tool()
+async def create_checkpoint(session_id: str = "default", trigger: str = "manual") -> Dict[str, Any]:
+    """
+    Manually capture a DOM checkpoint for the current page state in a session.
+    """
+    await ensure_initialized()
+    try:
+        page = await manager.get_page(session_id)
+        checkpoint = await recovery_manager.create_checkpoint(page, session_id=session_id, action_trigger=trigger)
+        if checkpoint:
+            return _complete_result({
+                "success": True,
+                "message": f"Created checkpoint {checkpoint.checkpoint_id} for session '{session_id}'.",
+                "checkpoint": checkpoint.model_dump()
+            })
+        return _complete_result({"success": True, "message": f"Checkpoint skipped for session '{session_id}' (No state change detected)."})
+    except Exception as e:
+        logger.error(f"Error in create_checkpoint tool: {e}")
+        return _complete_result({"success": False, "error": str(e)})
+
+
+@mcp.tool()
+async def load_latest_checkpoint(session_id: str = "default") -> Dict[str, Any]:
+    """
+    Retrieve the most recent DOM checkpoint recorded for a session.
+    """
+    try:
+        checkpoint = recovery_manager.load_latest_checkpoint(session_id)
+        if checkpoint:
+            return _complete_result({
+                "success": True,
+                "checkpoint": checkpoint.model_dump()
+            })
+        return _complete_result({"success": False, "message": f"No checkpoints found for session '{session_id}'."})
+    except Exception as e:
+        logger.error(f"Error in load_latest_checkpoint tool: {e}")
+        return _complete_result({"success": False, "error": str(e)})
+
+
+@mcp.tool()
+async def restore_checkpoint(session_id: str = "default") -> Dict[str, Any]:
+    """
+    Trigger automated recovery flow for a session from its latest DOM checkpoint.
+    Re-initializes browser context, navigates to target URL, restores state, and validates recovery confidence.
+    """
+    await ensure_initialized()
+    try:
+        result = await recovery_manager.restore_checkpoint(session_id=session_id, browser_manager=manager)
+        return _complete_result(result)
+    except Exception as e:
+        logger.error(f"Error in restore_checkpoint tool: {e}")
+        return _complete_result({"success": False, "error": str(e)})
+
+
+@mcp.tool()
+async def compare_checkpoint(session_id: str = "default", checkpoint_id: Optional[int] = None) -> Dict[str, Any]:
+    """
+    Compare the current live page state with the latest or specified DOM checkpoint.
+    """
+    await ensure_initialized()
+    try:
+        if checkpoint_id:
+            from browser_optimizer.cache.db import dom_checkpoint_db
+            raw = dom_checkpoint_db.get_checkpoint_by_id(checkpoint_id)
+            checkpoint = recovery_manager.DOMCheckpoint.model_validate(raw) if raw else None
+        else:
+            checkpoint = recovery_manager.load_latest_checkpoint(session_id)
+
+        if not checkpoint:
+            return _complete_result({"success": False, "error": f"No checkpoint found to compare for session '{session_id}'."})
+
+        page = await manager.get_page(session_id)
+        extracted = await extractor.extract(page)
+        compressed = compressor.compress(extracted)
+
+        diff = recovery_manager.compare_checkpoint(checkpoint, compressed)
+        return _complete_result({"success": True, "comparison": diff})
+    except Exception as e:
+        logger.error(f"Error in compare_checkpoint tool: {e}")
+        return _complete_result({"success": False, "error": str(e)})
+
+
+@mcp.tool()
+async def delete_session_checkpoints(session_id: str = "default") -> Dict[str, Any]:
+    """
+    Purge all DOM checkpoints stored for a session.
+    """
+    try:
+        recovery_manager.delete_session_checkpoints(session_id)
+        return _complete_result({"success": True, "message": f"Purged all checkpoints for session '{session_id}'."})
+    except Exception as e:
+        logger.error(f"Error in delete_session_checkpoints tool: {e}")
+        return _complete_result({"success": False, "error": str(e)})
+
+
+# ═════════════════════════════════════════════════════════════
+# LLM-Aware Website Discovery (llms.txt) MCP Tools
+# ═════════════════════════════════════════════════════════════
+
+@mcp.tool()
+async def discover_llms(url: str, force_refresh: bool = False) -> Dict[str, Any]:
+    """
+    Discover and parse llms.txt standard for a target site/url.
+    Returns categorized documentation sections, API references, guides, and repository links.
+    """
+    await ensure_initialized()
+    try:
+        result = await llms_discovery_manager.discover_llms(url, force_refresh=force_refresh)
+        return _complete_result({
+            "success": True,
+            "discovery": result.model_dump()
+        })
+    except Exception as e:
+        logger.error(f"Error in discover_llms tool: {e}")
+        return _complete_result({"success": False, "error": str(e)})
+
+
+@mcp.tool()
+def parse_llms(markdown: str, base_url: str = "") -> Dict[str, Any]:
+    """
+    Parse a raw llms.txt Markdown string into structured categorized resources.
+    """
+    try:
+        result = llms_discovery_manager.parse_llms(markdown, base_url=base_url)
+        return _complete_result({
+            "success": True,
+            "parsed": result.model_dump()
+        })
+    except Exception as e:
+        logger.error(f"Error in parse_llms tool: {e}")
+        return _complete_result({"success": False, "error": str(e)})
+
+
+@mcp.tool()
+def get_cached_llms(hostname: str) -> Dict[str, Any]:
+    """
+    Retrieve stored discovery cache entry for a specific hostname.
+    """
+    try:
+        cached = llms_discovery_manager.get_cached_llms(hostname)
+        if cached:
+            return _complete_result({"success": True, "cache_entry": cached})
+        return _complete_result({"success": False, "message": f"No discovery entry cached for host '{hostname}'."})
+    except Exception as e:
+        logger.error(f"Error in get_cached_llms tool: {e}")
+        return _complete_result({"success": False, "error": str(e)})
+
+
+@mcp.tool()
+async def select_navigation_strategy(url: str) -> Dict[str, Any]:
+    """
+    Query the Intelligent Decision Engine to determine whether a URL should use
+    DIRECT_FETCH (bypassing Playwright), PLAYWRIGHT (automation required), or HYBRID mode.
+    """
+    await ensure_initialized()
+    try:
+        strategy_res = await llms_discovery_manager.select_navigation_strategy(url)
+        return _complete_result(strategy_res.model_dump())
+    except Exception as e:
+        logger.error(f"Error in select_navigation_strategy tool: {e}")
+        return _complete_result({"success": False, "error": str(e)})
+
+
+@mcp.tool()
+async def fetch_documentation(url: str) -> Dict[str, Any]:
+    """
+    Fetch a documentation page directly via HTTP without opening Playwright,
+    extract UI elements, compress context, and return semantic payload.
+    """
+    await ensure_initialized()
+    try:
+        result = await llms_discovery_manager.direct_fetch(url)
+        return _complete_result(result)
+    except Exception as e:
+        logger.error(f"Error in fetch_documentation tool: {e}")
+        return _complete_result({"success": False, "error": str(e)})
+
+
+@mcp.tool()
+def invalidate_llms_cache(hostname: str) -> Dict[str, Any]:
+    """
+    Purge stored llms.txt discovery cache for a hostname.
+    """
+    try:
+        llms_discovery_manager.invalidate_llms_cache(hostname)
+        return _complete_result({"success": True, "message": f"Invalidated LLMS cache for host '{hostname}'."})
+    except Exception as e:
+        logger.error(f"Error in invalidate_llms_cache tool: {e}")
+        return _complete_result({"success": False, "error": str(e)})
 
 
 @mcp.tool()

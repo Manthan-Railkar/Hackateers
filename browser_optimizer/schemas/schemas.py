@@ -75,3 +75,74 @@ class ReplayHandlePayload(BaseModel):
     parameters: Dict[str, str]
     session_id: str = "default"
 
+
+# ─────────────────────────────────────────────────────────────
+# DOM Checkpointing & Recovery Models
+# ─────────────────────────────────────────────────────────────
+
+class DOMCheckpoint(BaseModel):
+    """
+    Strongly typed DOM Checkpoint model capturing page state, compressed DOM,
+    scroll position, viewport metrics, and element focus.
+    """
+    checkpoint_id: Optional[int] = None
+    session_id: str = "default"
+    timestamp: float
+    url: str
+    page_title: str
+    compressed_dom: Dict[str, Any]
+    dom_hash: str
+    scroll_x: int = 0
+    scroll_y: int = 0
+    viewport_width: int = 1280
+    viewport_height: int = 720
+    focused_element: Optional[str] = None
+    browser_context_id: Optional[str] = None
+    page_identifier: Optional[str] = None
+    checkpoint_version: str = "1.0"
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class RecoveryConfidenceResult(BaseModel):
+    """
+    Validation breakdown and confidence scoring produced during page state recovery.
+    """
+    confidence: float  # 0.0 to 1.0 (0 to 100%)
+    status: str        # "EXACT_MATCH" | "HIGH_CONFIDENCE" | "PARTIAL_MATCH" | "MISMATCH"
+    reason: str
+    can_auto_resume: bool
+    differences: Dict[str, Any] = Field(default_factory=dict)
+    breakdown: Dict[str, float] = Field(default_factory=dict)
+
+
+# ─────────────────────────────────────────────────────────────
+# LLM-Aware Discovery (llms.txt) Models
+# ─────────────────────────────────────────────────────────────
+
+class LLMSSectionItem(BaseModel):
+    title: str
+    url: str
+    description: Optional[str] = None
+
+
+class LLMSDiscoveryResult(BaseModel):
+    supported: bool = False
+    version: Optional[str] = None
+    documentation: List[LLMSSectionItem] = Field(default_factory=list)
+    api_reference: List[LLMSSectionItem] = Field(default_factory=list)
+    guides: List[LLMSSectionItem] = Field(default_factory=list)
+    tutorials: List[LLMSSectionItem] = Field(default_factory=list)
+    examples: List[LLMSSectionItem] = Field(default_factory=list)
+    openapi: List[LLMSSectionItem] = Field(default_factory=list)
+    changelog: List[LLMSSectionItem] = Field(default_factory=list)
+    repository: Optional[str] = None
+    sitemap: Optional[str] = None
+    raw_markdown: str = ""
+    discovered_urls: List[str] = Field(default_factory=list)
+
+
+class NavigationStrategyResult(BaseModel):
+    strategy: str  # "DIRECT_FETCH" | "PLAYWRIGHT" | "HYBRID"
+    reason: str
+    confidence: float
+

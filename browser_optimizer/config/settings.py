@@ -36,6 +36,22 @@ class Settings:
     TOOLS_LIST_TTL_MS = int(os.getenv("TOOLS_LIST_TTL_MS", "300000"))  # 5 minutes
     TOOLS_LIST_CACHE_SCOPE = os.getenv("TOOLS_LIST_CACHE_SCOPE", "public")
 
+    # DOM Checkpointing & Recovery Settings
+    ENABLE_CHECKPOINTING = os.getenv("ENABLE_CHECKPOINTING", "True").strip().lower() in ("true", "1", "yes")
+    MAX_CHECKPOINTS = int(os.getenv("MAX_CHECKPOINTS", "20"))
+    CHECKPOINT_INTERVAL = int(os.getenv("CHECKPOINT_INTERVAL", "1000"))  # ms
+    CHECKPOINT_RETENTION_DAYS = int(os.getenv("CHECKPOINT_RETENTION_DAYS", "7"))
+    MINIMUM_RESUME_CONFIDENCE = float(os.getenv("MINIMUM_RESUME_CONFIDENCE", "0.70"))
+    ASYNC_CHECKPOINTING = os.getenv("ASYNC_CHECKPOINTING", "True").strip().lower() in ("true", "1", "yes")
+
+    # LLM-Aware Website Discovery (llms.txt) Settings
+    ENABLE_LLMS_DISCOVERY = os.getenv("ENABLE_LLMS_DISCOVERY", "True").strip().lower() in ("true", "1", "yes")
+    LLMS_CACHE_TTL = int(os.getenv("LLMS_CACHE_TTL", "86400"))  # 24 hours
+    ENABLE_DIRECT_FETCH = os.getenv("ENABLE_DIRECT_FETCH", "True").strip().lower() in ("true", "1", "yes")
+    FALLBACK_TO_BROWSER = os.getenv("FALLBACK_TO_BROWSER", "True").strip().lower() in ("true", "1", "yes")
+    ALLOW_HYBRID_NAVIGATION = os.getenv("ALLOW_HYBRID_NAVIGATION", "True").strip().lower() in ("true", "1", "yes")
+    MAX_LLMS_SIZE = int(os.getenv("MAX_LLMS_SIZE", "1048576"))  # 1MB
+
 
 
 # Instantiated settings for export
