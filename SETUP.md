@@ -1,4 +1,4 @@
-# Pidgey 🐦 (Browser Optimizer MCP) - Setup & Integration Guide
+# Pidgey(Browser Optimizer MCP) - Setup & Integration Guide
 
 This guide provides step-by-step instructions for installing Pidgey and connecting it as a **Model Context Protocol (MCP)** server to your favorite AI clients, including **Antigravity**, **Claude Desktop**, **Cursor**, and custom agent frameworks.
 
@@ -11,8 +11,8 @@ Ensure you have **Python 3.10+** installed.
 
 ```bash
 # Clone the repository
-git clone https://github.com/Manthan-Railkar/Hackateers.git
-cd Hackateers
+git clone https://github.com/Manthan-Railkar/Pidgey.git
+cd Pidgey
 
 # Create and activate a virtual environment
 python -m venv .venv
@@ -115,7 +115,7 @@ Add Pidgey under `mcpServers`:
 {
   "mcpServers": {
     "pidgey-browser-optimizer": {
-      "command": "C:\\path\\to\\Hackateers\\.venv\\Scripts\\browser-optimizer.exe",
+      "command": "C:\\path\\to\\Pidgey\\.venv\\Scripts\\browser-optimizer.exe",
       "args": ["start"]
     }
   }
