@@ -31,97 +31,103 @@ The **Browser Optimizer MCP** is an intelligent middleware layer positioned betw
 The diagram below illustrates the complete component topology, data flows, storage boundaries, and telemetry channels across the entire middleware stack.
 
 ```mermaid
-flowchart TD
-    subgraph ClientLayer ["1. Client & Interface Layer"]
-        Agent["AI Agent / LLM Client\n(Claude, Antigravity, Cursor)"]
-        StdIO["FastMCP Stdio Server\n(main.py)"]
-        MetaTools["Meta-Tool Registry\n(list_tools / get_tool_schema)"]
+flowchart TB
+    subgraph CLUSTER_CLIENT ["1. CLIENT & PROTOCOL GATEWAY CLUSTER"]
+        Agent["🤖 AI Agent / LLM Client\n(Claude, Antigravity, Cursor)"]
+        StdIO["⚡ FastMCP Stdio Gateway\n(main.py)"]
+        MetaTools["📦 Meta-Tool Registry\n(list_tools / get_tool_schema)"]
+        StdIO --- MetaTools
     end
 
-    subgraph CacheLayer ["2. Two-Tier Caching & Embedding Subsystem"]
-        xxHash["Tier 1: 64-bit xxhash\nExact Match (<1ms)"]
-        EmbedEngine["Tier 2: 68-D Structural DOM Embedding\n(Tag Hist, CSS Hash, Depth, Attributes)"]
-        CosineMatch["Cosine Similarity Engine\n(Threshold >= 0.90)"]
-        DecayLogic["Dynamic Confidence Engine\n(Reward +0.05 / Decay -0.30)"]
+    subgraph CLUSTER_CACHE ["2. TWO-TIER FAST-PATH CACHE CLUSTER"]
+        xxHash["⚡ Tier 1: 64-bit xxhash\nExact Match (< 1ms)"]
+        EmbedEngine["🧠 Tier 2: 68-D Structural Embedding\n(Tag Hist, CSS Hash, Depth, Attributes)"]
+        CosineMatch["🎯 Cosine Similarity Engine\n(Threshold >= 0.90)"]
+        DecayLogic["📈 Dynamic Confidence Engine\n(Reward +0.05 / Decay -0.30)"]
+        
+        xxHash -->|"Tier 1 Miss"| EmbedEngine
+        EmbedEngine --> CosineMatch
+        CosineMatch <--> DecayLogic
     end
 
-    subgraph ExtractionLayer ["3. Extraction, Compression & Vision Subsystem"]
-        PageExtractor["Page Extractor\n(extractor.py & BeautifulSoup)"]
-        AXSnapshot["ARIA Tree Snapshot Engine\n(aria_snapshot)"]
-        VisionFallback{"Interactive Tags < 3 ?"}
-        GroqVLM["Multimodal Vision Analyzer\n(Groq Llama 3.2 11B Vision)"]
-        Compressor["DOM Context Compressor\n(Decomposes scripts, styles, svgs)"]
+    subgraph CLUSTER_EXECUTION ["3. BROWSER EXECUTION & MULTIMODAL EXTRACTION CLUSTER"]
+        subgraph BrowserEngine ["Execution & Action Engine"]
+            BrowserManager["🌐 Async Playwright Manager\n(manager.py)"]
+            Chromium["🖥️ Headless Chromium"]
+            MacroEngine["🔄 Macro & Skill Engine\n(record, parameterize, replay, resume)"]
+            BrowserManager --> Chromium
+            BrowserManager <--> MacroEngine
+        end
+
+        subgraph ExtractionPipeline ["Perception & Compression Pipeline"]
+            PageExtractor["📄 Page Extractor\n(extractor.py)"]
+            AXSnapshot["♿ ARIA Tree Snapshot\n(aria_snapshot)"]
+            VisionFallback{"👁️ Interactive Tags < 3 ?"}
+            GroqVLM["🖼️ Groq Llama 3.2 11B Vision\n(Multimodal VLM Analysis)"]
+            Compressor["🗜️ DOM Context Compressor\n(Strips scripts, styles, SVGs)"]
+
+            PageExtractor --> AXSnapshot
+            PageExtractor --> VisionFallback
+            VisionFallback -->|"Yes (Canvas/SPA)"| GroqVLM
+            VisionFallback -->|"No (Standard HTML)"| Compressor
+            GroqVLM --> Compressor
+            AXSnapshot --> Compressor
+        end
+
+        Chromium --> PageExtractor
     end
 
-    subgraph IntelligenceLayer ["4. Intelligence & Classification Subsystem"]
-        FeatExtractor["33-Feature Extractor\n(feature_extractor.py)"]
-        LGBMModel["LightGBM ML Classifier\n(page_classifier.pkl >= 0.65)"]
-        HeuristicEngine["Rule-Based Heuristic Fallback\n(LOGIN, SEARCH, CHECKOUT, etc.)"]
-        DiffEngine["State Difference Engine\n(added / removed UI diffs)"]
+    subgraph CLUSTER_INTELLIGENCE ["4. PAGE INTELLIGENCE & DELTA ENGINE CLUSTER"]
+        FeatExtractor["🔍 33-Feature Extractor\n(feature_extractor.py)"]
+        LGBMModel["🤖 LightGBM Classifier\n(Threshold >= 0.65)"]
+        HeuristicEngine["📋 Rule-Based Fallback\n(LOGIN, SEARCH, CHECKOUT, etc.)"]
+        DiffEngine["🔀 State Difference Engine\n(added / removed UI diffs)"]
+
+        FeatExtractor --> LGBMModel
+        LGBMModel -->|"Confidence < 0.65"| HeuristicEngine
+        LGBMModel & HeuristicEngine --> DiffEngine
     end
 
-    subgraph ExecutionLayer ["5. Browser Execution & Automation Engine"]
-        BrowserManager["Async Browser Manager\n(manager.py & Playwright)"]
-        Chromium["Chromium Headless Instance"]
-        RuleExecutor["Rule-Based Action Executor\n(click, fill, select, scroll)"]
-        MacroEngine["Macro Automation & Skill Engine\n(record, parameterize, replay, resume)"]
+    subgraph CLUSTER_STORAGE ["5. PERSISTENCE & TELEMETRY CLUSTER"]
+        subgraph DBStorage ["SQLite Persistence"]
+            DB[("💾 SQLite Database\n(cache.db)")]
+            TableCache["cache Table"]
+            TableMacros["macros Table"]
+            TableSessions["session_states Table"]
+            TableReplay["session_replay Log"]
+            DB --- TableCache
+            DB --- TableMacros
+            DB --- TableSessions
+            DB --- TableReplay
+        end
+
+        subgraph Observability ["Telemetry & Observability"]
+            TiktokenEngine["🧮 Tiktoken BPE Counter\n(cl100k_base Exact Tokens)"]
+            MetricsTracker["📊 Thread-Safe Metrics Tracker\n(metrics.py)"]
+            DashboardServer["🌐 Dashboard Server\n(http://localhost:8050)"]
+            WSServer["📡 Live Watcher WebSocket\n(ws://localhost:8765)"]
+
+            TiktokenEngine --> MetricsTracker
+            MetricsTracker --> DashboardServer
+        end
     end
 
-    subgraph StorageLayer ["6. Persistence Subsystem (SQLite)"]
-        DB[("SQLite Database\n(cache.db)")]
-        TableCache["cache Table"]
-        TableMacros["macros Table"]
-        TableSessions["session_states Table"]
-        TableReplay["session_replay Log"]
-    end
+    %% Data Flow Connections Between Clusters
+    Agent <-->|"MCP stdio JSON-RPC"| StdIO
+    StdIO -->|"1. Request Context"| xxHash
 
-    subgraph TelemetryLayer ["7. Telemetry & Observability Subsystem"]
-        TiktokenEngine["Tiktoken BPE Counter\n(cl100k_base Exact Tokens)"]
-        MetricsTracker["Thread-Safe Metrics Tracker\n(metrics.py)"]
-        DashboardServer["Dashboard HTTP Server\n(server.py :8050)"]
-        WSServer["Live Page Watcher WebSocket\n(ws://localhost:8765)"]
-    end
+    xxHash -->|"Tier 1 Cache Hit (<1ms)"| Agent
+    CosineMatch -->|"Tier 2 Hit (Similarity >= 0.90)"| Agent
+    CosineMatch -->|"2. Cache Miss -> Launch Execution"| BrowserManager
 
-    %% Flow Connections
-    Agent <-->|MCP stdio JSON-RPC| StdIO
-    StdIO --- MetaTools
-    StdIO -->|1. Request Context| xxHash
+    Compressor -->|"3. Cleaned DOM & AX Tree"| FeatExtractor
+    DiffEngine -->|"4. Save Cache & Session State"| DB
+    BrowserManager <-->|"Persist Cookies & Storage"| TableSessions
+    MacroEngine <-->|"Load / Save Skills"| TableMacros
 
-    xxHash -->|Cache Hit| Agent
-    xxHash -->|Cache Miss| EmbedEngine
-    EmbedEngine --> CosineMatch
-    CosineMatch -->|"Similarity >= 0.90"| Agent
-    CosineMatch -->|Cache Miss| BrowserManager
-
-    BrowserManager --> Chromium
-    Chromium --> PageExtractor
-    PageExtractor --> AXSnapshot
-    PageExtractor --> VisionFallback
-
-    VisionFallback -->|"Yes (Canvas/SPA)"| GroqVLM
-    VisionFallback -->|"No (Standard HTML)"| Compressor
-    GroqVLM --> Compressor
-    AXSnapshot --> Compressor
-
-    Compressor --> FeatExtractor
-    FeatExtractor --> LGBMModel
-    LGBMModel -->|"Confidence < 0.65"| HeuristicEngine
-    LGBMModel & HeuristicEngine --> DiffEngine
-
-    DiffEngine -->|Update Cache| DB
-    DB --- TableCache
-    DB --- TableMacros
-    DB --- TableSessions
-    DB --- TableReplay
-
-    BrowserManager <-->|"Persist / Load Cookies & Storage"| TableSessions
-    RuleExecutor <--> MacroEngine
-    MacroEngine <--> TableMacros
-
-    Compressor --> TiktokenEngine
-    TiktokenEngine --> MetricsTracker
-    MetricsTracker --> DashboardServer
-    DiffEngine --> WSServer
+    Compressor -->|"5. Calculate BPE Savings"| TiktokenEngine
+    DiffEngine -->|"6. Push UI Diffs"| WSServer
+    DiffEngine -->|"7. Return Compressed Response"| Agent
 ```
 
 ---
