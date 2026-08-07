@@ -15,6 +15,8 @@ class UIElement(BaseModel):
     href: Optional[str] = Field(None, description="Anchor link target URL")
     selector: Optional[str] = Field(None, description="Unique CSS or XPath selector")
     is_visible: bool = Field(True, description="Whether element is visible in viewport")
+    bounding_box: Optional[Dict[str, int]] = Field(None, description="Visual bounding box (x, y, width, height)")
+    feature_embedding: Optional[List[float]] = Field(None, description="Visual/Structural feature embedding vector")
     attributes: Dict[str, str] = Field(default_factory=dict, description="Additional custom attributes")
 
 
