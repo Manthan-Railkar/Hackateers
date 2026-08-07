@@ -3,6 +3,7 @@ Browser management module using Playwright.
 Handles launching, session contexts, page management, and teardown.
 """
 
+import base64
 from typing import Any, Dict, Optional, Tuple
 from playwright.async_api import async_playwright, Playwright, Browser, BrowserContext, Page
 from browser_optimizer.config.settings import settings

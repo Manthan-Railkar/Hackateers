@@ -15,8 +15,8 @@ class Settings:
     Provides sane defaults for logging, browser execution, caching, and timeouts.
     """
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
-    HEADLESS = os.getenv("HEADLESS", "True") == "True"
-    CACHE_ENABLED = os.getenv("CACHE_ENABLED", "True") == "True"
+    HEADLESS = os.getenv("HEADLESS", "True").strip().lower() in ("true", "1", "yes")
+    CACHE_ENABLED = os.getenv("CACHE_ENABLED", "True").strip().lower() in ("true", "1", "yes")
     CACHE_TTL = int(os.getenv("CACHE_TTL", "300"))
     CACHE_MAX_SIZE = int(os.getenv("CACHE_MAX_SIZE", "100"))
     REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
@@ -26,7 +26,7 @@ class Settings:
     WEBSOCKET_HOST = os.getenv("WEBSOCKET_HOST", "localhost")
     WEBSOCKET_PORT = int(os.getenv("WEBSOCKET_PORT", "8765"))
     DASHBOARD_PORT = int(os.getenv("DASHBOARD_PORT", "8050"))
-    AUTO_OPEN_DASHBOARD = os.getenv("AUTO_OPEN_DASHBOARD", "True") == "True"
+    AUTO_OPEN_DASHBOARD = os.getenv("AUTO_OPEN_DASHBOARD", "True").strip().lower() in ("true", "1", "yes")
     VISUAL_FALLBACK_THRESHOLD = int(os.getenv("VISUAL_FALLBACK_THRESHOLD", "3"))
     GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
     GROQ_VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "llama-3.2-11b-vision-preview")
