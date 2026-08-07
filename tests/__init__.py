@@ -1,0 +1,3 @@
+"""
+Browser Optimizer Test Suite
+"""

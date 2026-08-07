@@ -1,6 +1,6 @@
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from browser_optimizer.config.settings import get_settings
 from browser_optimizer.utils.logger import logger
@@ -86,7 +86,7 @@ def save_session_state(session_id: str, storage_state: Dict[str, Any], db_path: 
         db_path = get_settings().SQLITE_DB_PATH
     
     storage_state_json = json.dumps(storage_state)
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     
     with get_db_connection(db_path) as conn:
         cursor = conn.cursor()
