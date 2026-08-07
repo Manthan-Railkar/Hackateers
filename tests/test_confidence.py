@@ -52,8 +52,14 @@ def clean_databases(monkeypatch):
 
 
 def test_page_cache_confidence_decay_and_routing():
-    """Test that page cache confidence starts at 0.8, decays on failure, and gets bypassed if < 0.3."""
+    """
+    Test that successful cache hits gradually increase confidence, while failures
+    steeply penalize confidence.
+    """
+    # 1. Start with fresh cache
     from browser_optimizer.cache.cache import semantic_cache
+    semantic_cache.enabled = True
+    semantic_cache.clear()
 
     url = "https://example.com/login"
     html = "<html><head><title>Login</title></head><body><button>Login</button></body></html>"
@@ -87,8 +93,13 @@ def test_page_cache_confidence_decay_and_routing():
 
 
 def test_page_cache_verification_range():
-    """Test that page cache hit in verification range (0.3 <= confidence < 0.7) performs verification."""
+    """
+    Test that cache entries in the [0.3, 0.7) confidence band trigger state verification,
+    where a state mismatch (e.g., title changed) forces a cache miss and auto-decays the entry.
+    """
     from browser_optimizer.cache.cache import semantic_cache
+    semantic_cache.enabled = True
+    semantic_cache.clear()
 
     url = "https://example.com/login"
     html = "<html><head><title>Login Page</title></head><body><button>Login</button></body></html>"

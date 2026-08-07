@@ -85,7 +85,7 @@ async def setup_websocket_server(monkeypatch):
 @pytest.mark.anyio
 async def test_websocket_registration():
     """Verify that clients can connect to the websocket server and register for a session."""
-    uri = f"ws://{settings.WEBSOCKET_HOST}:{settings.WEBSOCKET_PORT}"
+    uri = f"ws://127.0.0.1:{settings.WEBSOCKET_PORT}"
     async with websockets.connect(uri) as ws:
         # Register for custom session 'sessionX'
         reg_payload = {"action": "register", "session_id": "sessionX"}
@@ -102,7 +102,7 @@ async def test_websocket_registration():
 @pytest.mark.anyio
 async def test_watch_page_push_updates():
     """Verify that watch_page periodic evaluation pushes visual updates to registered websocket clients."""
-    uri = f"ws://{settings.WEBSOCKET_HOST}:{settings.WEBSOCKET_PORT}"
+    uri = f"ws://127.0.0.1:{settings.WEBSOCKET_PORT}"
     async with websockets.connect(uri) as ws:
         # Register for 'default' session
         await ws.send(json.dumps({"action": "register", "session_id": "default"}))
@@ -133,7 +133,7 @@ async def test_watch_page_push_updates():
 @pytest.mark.anyio
 async def test_session_isolated_pushes():
     """Verify that websocket pushes are strictly isolated by session ID."""
-    uri = f"ws://{settings.WEBSOCKET_HOST}:{settings.WEBSOCKET_PORT}"
+    uri = f"ws://127.0.0.1:{settings.WEBSOCKET_PORT}"
     
     # Client A connects and registers for sessionA
     async with websockets.connect(uri) as ws_a:

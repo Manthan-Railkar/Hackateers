@@ -5,6 +5,7 @@ Handles launching, session contexts, page management, and teardown.
 
 import base64
 from typing import Any, Dict, Optional, Tuple
+import base64
 from playwright.async_api import async_playwright, Playwright, Browser, BrowserContext, Page
 from browser_optimizer.config.settings import settings
 from browser_optimizer.utils.logger import logger

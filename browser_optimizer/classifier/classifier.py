@@ -89,8 +89,11 @@ class TaskClassifier:
                     p_type = PageType(name)
                     scores[p_type] = prob
                 except ValueError:
-                    # Ignore classes that are not mapped in PageType enum
                     pass
+            
+            # Ensure UNKNOWN is present if it's the selected page_type
+            if page_type == PageType.UNKNOWN and PageType.UNKNOWN not in scores:
+                scores[PageType.UNKNOWN] = 1.0
 
             return {
                 "page_type": page_type,

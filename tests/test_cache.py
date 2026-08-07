@@ -2,7 +2,7 @@ import time
 from browser_optimizer.cache.cache import SemanticCache
 
 def test_cache_hit_and_miss():
-    cache = SemanticCache()
+    cache = SemanticCache(enabled=True)
     cache.clear()  # Flush any persisted state from prior runs
     url = "https://example.com/login"
     html_content = "<html><body><button>Login</button></body></html>"
@@ -44,7 +44,7 @@ def test_cache_hit_and_miss():
 
 def test_cache_ttl_expiry():
     # Set cache with short TTL (e.g. 1 second)
-    cache = SemanticCache(ttl=1)
+    cache = SemanticCache(enabled=True, ttl=1)
     cache.clear()  # Flush any persisted state from prior runs
     
     url = "https://example.com/temp"
