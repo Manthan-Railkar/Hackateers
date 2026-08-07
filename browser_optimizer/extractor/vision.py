@@ -54,7 +54,9 @@ class VisionAnalyzer:
         prompt = (
             "Analyze this webpage screenshot (Canvas/SPA layout). Identify all interactive UI controls "
             "(buttons, inputs, links, canvases, textareas). Return ONLY a JSON array of objects with keys: "
-            "tag, text, id, type, selector. Example: [{'tag': 'button', 'text': 'Submit', 'id': 'btn1', 'type': 'submit', 'selector': '#btn1'}]"
+            "tag, text, id, type, selector, and bounding_box. "
+            "For bounding_box, provide a dictionary with x, y, width, height representing the pixel coordinates. "
+            "Example: [{'tag': 'button', 'text': 'Submit', 'id': 'btn1', 'type': 'submit', 'selector': '#btn1', 'bounding_box': {'x': 100, 'y': 200, 'width': 120, 'height': 40}}]"
         )
         
         payload = {
@@ -95,7 +97,8 @@ class VisionAnalyzer:
                     text=item.get("text"),
                     id=item.get("id"),
                     type=item.get("type"),
-                    selector=item.get("selector", f"#{item.get('id')}" if item.get('id') else None)
+                    selector=item.get("selector", f"#{item.get('id')}" if item.get('id') else None),
+                    bounding_box=item.get("bounding_box")
                 ))
             logger.info(f"Groq VLM successfully extracted {len(elements)} visual UI elements.")
             return elements
@@ -125,6 +128,7 @@ class VisionAnalyzer:
                 id="visual_input_main",
                 placeholder="Visual input...",
                 type="text",
-                selector="#visual_input_main"
+                selector="#visual_input_main",
+                bounding_box={"x": 50, "y": 150, "width": 300, "height": 40}
             )
         ]
