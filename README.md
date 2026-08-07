@@ -217,8 +217,8 @@ Pidgey exposes 28 native tools for AI Agents:
 
 ## 👥 Team Members
 
-- **Manthan Railkar** — Lead Software Engineer & AI Architect (System Design, MCP Protocol Server, Recovery Engine, `llms.txt` Discovery, Playwright Middleware)
-- **Hackateers Team** — Concept, Testing, & Optimization
+- **Manthan Railkar** and **Ayush Mhatre**
+- **Hackateers Team**
 
 ---
 
