@@ -113,6 +113,115 @@ This starts:
 
 ---
 
+## Connecting to AI Clients
+
+Pidgey runs over standard input/output (stdio) transport. Below are configuration steps for popular AI client platforms and agent frameworks.
+
+### Claude Desktop
+
+Locate or create your `claude_desktop_config.json` configuration file:
+- On Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+- On macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+
+Add Pidgey under `mcpServers`:
+
+```json
+{
+  "mcpServers": {
+    "pidgey-browser-optimizer": {
+      "command": "browser-optimizer",
+      "args": ["start"],
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
+    }
+  }
+}
+```
+
+If using an absolute path to your Python virtual environment executable on Windows:
+
+```json
+{
+  "mcpServers": {
+    "pidgey-browser-optimizer": {
+      "command": "C:\\path\\to\\Hackateers\\.venv\\Scripts\\browser-optimizer.exe",
+      "args": ["start"]
+    }
+  }
+}
+```
+
+Restart Claude Desktop to load the tools.
+
+---
+
+### Antigravity
+
+Add Pidgey to your workspace or global `mcp_config.json` configuration file:
+
+```json
+{
+  "mcpServers": {
+    "pidgey": {
+      "command": "browser-optimizer",
+      "args": ["start"]
+    }
+  }
+}
+```
+
+Alternatively using direct Python execution:
+
+```json
+{
+  "mcpServers": {
+    "pidgey": {
+      "command": "python",
+      "args": ["-m", "browser_optimizer.server.main"]
+    }
+  }
+}
+```
+
+---
+
+### Cursor IDE
+
+1. Open Cursor Settings (`Ctrl + ,` or `Cmd + ,`).
+2. Navigate to Features -> MCP Servers.
+3. Click + Add New MCP Server.
+4. Fill in the server details:
+   - Name: `Pidgey`
+   - Type: `command` (stdio)
+   - Command: `browser-optimizer start`
+5. Click Save.
+
+---
+
+### Custom Agent Frameworks (LangChain, LlamaIndex, AutoGen)
+
+You can invoke Pidgey programmatically from custom Python MCP client applications:
+
+```python
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+server_params = StdioServerParameters(
+    command="browser-optimizer",
+    args=["start"],
+    env=None
+)
+
+async with stdio_client(server_params) as (read, write):
+    async with ClientSession(read, write) as session:
+        await session.initialize()
+        tools = await session.call_tool("list_tools", {})
+        print("Discovered tools:", tools)
+```
+
+---
+
 ## Exposed MCP Tools
 
 The server exposes the following protocol tools:
