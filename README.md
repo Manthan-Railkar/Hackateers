@@ -1,107 +1,177 @@
-# Pidgey (Browser Optimizer MCP)
+# Pidgey: Browser Optimizer MCP
 
-**A powerful middleware between AI Agents and Websites designed to make Web Automation tasks blazingly fast and cost-effective.**
+A high-performance middleware between AI Agents and Web Applications designed to make browser automation blazingly fast, fault-tolerant, and cost-effective.
 
-[![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://python.org)
-[![FastMCP](https://img.shields.io/badge/FastMCP-Server-brightgreen.svg)](https://github.com/fastmcp)
-[![Playwright](https://img.shields.io/badge/Playwright-Enabled-red.svg)](https://playwright.dev/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
-Pidgey acts as an intelligent intermediary (Model Context Protocol Server) that intercepts web navigation requests from AI Agents. Instead of feeding massive, token-heavy raw HTML back to your LLM, Pidgey compresses the DOM, strips away noise, semantically caches pages, and leverages Multimodal Vision Models (VLMs) to provide an ultra-lean, highly actionable UI payload.
-
-**The Result?** You save up to 85% on LLM context tokens per page load, dramatically reducing API costs while increasing your agent's execution speed and reliability.
+Pidgey acts as an intelligent intermediary Model Context Protocol (MCP) server that intercepts web navigation requests from AI Agents. Instead of feeding massive, token-heavy raw HTML back to LLMs, Pidgey compresses the DOM, strips non-essential elements, semantically caches page contexts, recovers from browser failures using versioned DOM checkpoints, and leverages LLM-aware website discovery (`llms.txt`) to bypass browser rendering altogether when inspecting static documentation.
 
 ---
 
-## ✨ Key Features
+## Overview
 
-- 🏎️ **Extreme Token Compression**: Decomposes non-essential tags (scripts, SVGs, styles) and extracts purely interactive UI controls into a compact JSON schema.
-- 🧠 **Semantic Caching & Embedding**: Automatically embeds web page contexts locally using `SentenceTransformers` and SQLite. Identical or highly similar (cosine similarity > 0.90) page hits return instantly without re-rendering the DOM.
-- 👁️ **Multimodal VLM Fallback**: For Canvas-heavy apps, CAPTCHAs, or SPAs lacking standard HTML controls, Pidgey automatically captures a screenshot and uses **Groq's Llama 3.2 Vision** model to extract interactive bounding boxes.
-- 📊 **Real-time Metrics Dashboard**: Includes a live, glassmorphic HTTP dashboard to visually track your LLM token savings (powered by accurate `tiktoken` byte-pair encoding counts) and cache hit ratios.
-- ⚡ **FastMCP Integration**: Exposes a standard MCP stdio interface, instantly pluggable into any agent framework (like Claude Desktop or custom LangChain setups).
+Pidgey reduces token context size by up to 85% per page load, drastically lowering LLM API costs while improving agent execution speed, session isolation, and operational reliability.
 
 ---
 
-## 🛠️ Installation
+## Key Capabilities
 
-Pidgey is designed to be installed as a local CLI tool and Python package. For a comprehensive integration guide across **Antigravity**, **Claude Desktop**, **Cursor**, and custom agents, see [SETUP.md](file:///c:/Users/Manthan%20Railkar/Desktop/Git/Pidgey/SETUP.md).
+- **Extreme Token Compression**: Strips non-essential markup (scripts, SVGs, styles, dynamic tracking attributes) and extracts interactive UI controls into a compact JSON schema.
+- **LLM-Aware Website Discovery (`llms.txt`)**: Automatically discovers and parses `/llms.txt` specifications to determine whether browser automation is necessary. Bypasses Playwright to fetch and compress static documentation pages directly via HTTP.
+- **DOM Checkpointing and Recovery Framework**: Automatically persists versioned DOM checkpoints and Playwright context storage states. Recovers transparently from browser process crashes, WebSocket disconnects, navigation timeouts, and network interruptions.
+- **Semantic Caching and Structural Embedding**: Uses structural vector embeddings and cosine similarity in SQLite to return cached contexts for identical or template-similar pages without re-rendering.
+- **Multimodal VLM Fallback**: Automatically captures screenshots and queries Multimodal Vision Models (Groq Llama 3.2 Vision) for canvas-heavy applications, CAPTCHAs, or pages lacking HTML controls.
+- **Mission Control Live Dashboard**: Serves a real-time web dashboard (HTTP port 8050 / WebSocket port 8765) to monitor live screenshots, token savings, cost reductions, active sessions, and telemetry.
+- **FastMCP Protocol Integration**: Implements MCP 2026-07-28 protocol compliance, offering stdio transport and stateless multi round-trip request (MRTR) skill macro replays.
 
-### 1. Clone the repository
+---
+
+## Architecture
+
+```text
+Incoming Agent Request
+          |
+          v
+Browser Optimizer MCP Server
+          |
+  +-------+-------------------------+
+  |                                 |
+  v                                 v
+LLMSDiscoveryManager         RecoveryManager
+  |                                 |
+  +----> Direct Fetch (No Browser)  +----> DOM Checkpoints DB (SQLite)
+  |                                 |
+  +----> Playwright Browser Manager <+
+                 |
+                 v
+          Web Application
+```
+
+---
+
+## Installation
+
+### Prerequisites
+
+- Python 3.10 or higher
+- Git
+
+### Quick Setup
+
+1. Clone the repository:
 ```bash
 git clone https://github.com/Manthan-Railkar/Hackateers.git
 cd Hackateers
 ```
 
-### 2. Set up a virtual environment
+2. Create and activate a virtual environment:
 ```bash
 python -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 ```
 
-### 3. Install Pidgey
-Install the project in editable mode so the CLI commands are registered.
+3. Install package in editable mode:
 ```bash
 pip install -e .
 ```
 
-### 4. Install Playwright Browsers
-Pidgey requires Chromium to natively control the browser. We've built an auto-installer to handle this and register the MCP server config for you:
+4. Install Playwright browser dependencies:
 ```bash
 browser-optimizer install
 ```
 
-### 5. Environment Configuration
-Copy the sample environment file and configure your settings:
+5. Configure environment variables:
 ```bash
 cp .env.example .env
 ```
-*(Optional)* To enable the VLM Fallback for Canvas apps, add your [Groq API Key](https://console.groq.com/keys) to the `.env` file:
+
+Configure `.env` settings as needed:
 ```env
+LOG_LEVEL=INFO
+HEADLESS=True
+CACHE_ENABLED=True
+ENABLE_CHECKPOINTING=True
+ENABLE_LLMS_DISCOVERY=True
+ENABLE_DIRECT_FETCH=True
+WEBSOCKET_PORT=8765
+DASHBOARD_PORT=8050
 GROQ_API_KEY=your_api_key_here
-GROQ_VISION_MODEL=llama-3.2-11b-vision-preview
 ```
 
 ---
 
-## 🚀 Usage
+## Usage
 
-Starting Pidgey is incredibly simple. Just run:
+Start the Browser Optimizer MCP server and Mission Control dashboard:
 
 ```bash
 browser-optimizer start
 ```
 
-This single command will:
-1. Launch the **FastMCP stdio server**, ready to receive tool calls (`extract_context`, `execute_action`, `page_diff`, etc.) from your AI Agents.
-2. Spin up a background **Dashboard Web Server** at `http://localhost:8050`.
-
-You can open `http://localhost:8050` in your browser at any time to watch your token savings grow in real-time as your agents navigate the web!
-
----
-
-## 🧩 MCP Tools Exposed
-
-Once connected, your AI Agent will have access to the following native tools:
-
-- `extract_context(url)`: Navigates to a URL and returns the hyper-compressed JSON representation of interactive UI elements.
-- `execute_action(url, action, selector, value)`: Triggers a Playwright browser action (click, fill, select, scroll) on the page.
-- `page_diff(url)`: Computes the exact DOM state delta (added/removed elements) after a click or navigation.
-- `summarize_page(url)`: Uses lightweight NLP heuristic logic to return a summary of the page structure.
-- `classify_page(url)`: Uses a LightGBM ML model (or heuristic fallback) to categorize the page (e.g. LOGIN, SEARCH, CHECKOUT).
-- `watch_page(url, frequency)`: Spawns a background WebSocket task that streams live DOM changes back to the agent.
-- `start_macro_recording(session_id)` & `save_macro(macro_id)`: Records a sequence of actions into an automated skill pipeline for repetitive workflows.
+This starts:
+1. FastMCP stdio server handling agent tool calls.
+2. Mission Control live visual dashboard at `http://localhost:8050/mission-control`.
+3. WebSocket push mode poller on `ws://localhost:8765`.
 
 ---
 
-## 🧪 Testing and Benchmarks
+## Exposed MCP Tools
 
-We've included a synthetic benchmark suite to verify the token compression ratios across complex webpages (e.g., HackerNews).
+The server exposes the following protocol tools:
+
+### Core Context & Execution
+- `extract_context(url, session_id)`: Extracts compressed UI context. Consults `llms.txt` discovery engine to use direct HTTP fetch when possible, avoiding browser launch.
+- `execute_action(action, selector, value, session_id)`: Executes browser actions (click, type, fill, select, scroll, wait, navigate) with automatic error recovery retries.
+- `page_diff(url, session_id)`: Computes DOM deltas (added/removed elements) since the previous observation.
+- `summarize_page(url, session_id)`: Returns a concise structural summary of the page.
+- `classify_page(url, session_id)`: Categorizes page type (LOGIN, SEARCH, PRODUCT, CHECKOUT, etc.).
+- `wait_until_ready(url, timeout, session_id)`: Waits for network stability and DOM load.
+- `cache_lookup(url, session_id)`: Queries local SQLite semantic cache directly.
+
+### DOM Checkpointing & Recovery
+- `create_checkpoint(session_id, trigger)`: Captures a versioned DOM checkpoint.
+- `load_latest_checkpoint(session_id)`: Retrieves latest checkpoint for a session.
+- `restore_checkpoint(session_id)`: Restores browser state from latest checkpoint with confidence validation.
+- `compare_checkpoint(session_id, checkpoint_id)`: Returns structural diff between checkpoint and current page.
+- `delete_session_checkpoints(session_id)`: Purges stored checkpoints for a session.
+
+### LLM-Aware Website Discovery (`llms.txt`)
+- `discover_llms(url, force_refresh)`: Discovers and parses `/llms.txt` specification for a website.
+- `parse_llms(markdown, base_url)`: Parses raw Markdown into structured documentation catalog.
+- `get_cached_llms(hostname)`: Retrieves stored discovery cache entry.
+- `select_navigation_strategy(url)`: Queries Decision Engine for strategy (DIRECT_FETCH, PLAYWRIGHT, HYBRID).
+- `fetch_documentation(url)`: Direct HTTP download and DOM compression without Playwright.
+- `invalidate_llms_cache(hostname)`: Purges stored `llms.txt` cache for a host.
+
+### Automation, Monitoring & Dashboard
+- `start_macro_recording(session_id)` & `save_macro(name, page_type, parameters_map, session_id)`: Record action sequences into reusable skills.
+- `replay_skill(macro_id, parameters, session_id)`: Replays macro with stateless handle resumption.
+- `list_skills(page_type)` & `suggest_skill(page_type)`: Recommend recorded skills based on page category.
+- `watch_page(url, interval_seconds, session_id)` & `stop_watch_page(session_id)`: Stream live DOM changes via WebSocket.
+- `get_session_replay(session_id)`: Retrieve append-only action execution log.
+- `get_metrics()`: Returns real-time token savings, cache hit ratios, and discovery stats.
+- `open_dashboard()`: Launches Mission Control dashboard in default browser.
+
+---
+
+## Testing
+
+Run the full pytest suite:
+
 ```bash
-PYTHONPATH=. .venv/bin/python scripts/benchmark.py
+python -m pytest tests/ -v
 ```
-*(Note: Expect >85% token savings compared to raw DOM ingestion!)*
+
+The test suite covers:
+- Semantic caching and structural embeddings (`test_cache.py`, `test_embedding.py`)
+- DOM compression and visual fallback (`test_compressor.py`, `test_visual_fallback.py`)
+- Page classification (`test_classifier.py`)
+- Macro skills and MRTR replay (`test_confidence.py`, `test_sessions.py`)
+- MCP 2026-07-28 protocol compliance (`test_mcp_compliance.py`)
+- DOM Checkpointing and Failure Recovery (`test_recovery.py`)
+- LLM-Aware Website Discovery (`test_discovery.py`)
+- Dashboard API & Observability (`test_dashboard.py`, `test_observability.py`)
 
 ---
 
-*Built for the Hackateers.*
+## License
+
+MIT License. Developed for Hackateers.

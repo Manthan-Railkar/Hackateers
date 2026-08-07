@@ -258,27 +258,56 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         pass
 
 
-def start_dashboard_server(port: Optional[int] = None):
-    """Launch the dashboard HTTP server in a background daemon thread."""
+_server_instance: Optional[HTTPServer] = None
+_server_lock = threading.Lock()
+_dashboard_opened = False
+
+
+def open_dashboard_in_browser(port: Optional[int] = None) -> bool:
+    """
+    Open the Mission Control dashboard URL in the default web browser.
+    """
+    global _dashboard_opened
     target_port = port or DASHBOARD_PORT
+    url = f"http://localhost:{target_port}/mission-control"
     try:
-        class ReusableHTTPServer(HTTPServer):
-            allow_reuse_address = True
+        logger.info(f"Opening Mission Control dashboard at {url}")
+        opened = webbrowser.open(url)
+        _dashboard_opened = True
+        return opened
+    except Exception as e:
+        logger.warning(f"Could not open Mission Control dashboard in browser: {e}")
+        return False
 
-        server = ReusableHTTPServer(("0.0.0.0", target_port), DashboardHandler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        logger.info(f"Dashboard server started at http://localhost:{target_port}")
 
-        if settings.AUTO_OPEN_DASHBOARD and port is None:
-            try:
-                url = f"http://localhost:{target_port}/mission-control"
-                logger.info(f"Automatically opening Mission Control dashboard at {url}")
-                webbrowser.open(url)
-            except Exception as e:
-                logger.warning(f"Could not automatically open Mission Control dashboard in web browser: {e}")
+def start_dashboard_server(port: Optional[int] = None) -> Optional[HTTPServer]:
+    """
+    Launch the dashboard HTTP server as a background daemon thread.
+    Thread-safe and idempotent — returns the existing server instance if already started.
+    """
+    global _server_instance
+    with _server_lock:
+        if _server_instance is not None:
+            return _server_instance
 
-        return server
-    except OSError as e:
-        logger.warning(f"Could not start dashboard server on port {target_port}: {e}")
-        return None
+        target_port = port or DASHBOARD_PORT
+        try:
+            class ReusableHTTPServer(HTTPServer):
+                allow_reuse_address = True
+
+            server = ReusableHTTPServer(("0.0.0.0", target_port), DashboardHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            _server_instance = server
+            logger.info(f"Dashboard server started at http://localhost:{target_port}")
+
+            if settings.AUTO_OPEN_DASHBOARD and port is None:
+                # Use a short timer delay to ensure socket accept loop is running before browser connects
+                timer = threading.Timer(0.3, open_dashboard_in_browser, args=[target_port])
+                timer.daemon = True
+                timer.start()
+
+            return server
+        except OSError as e:
+            logger.warning(f"Could not start dashboard server on port {target_port}: {e}")
+            return None

@@ -21,7 +21,7 @@ from browser_optimizer.cache.db import macro_store, session_replay_store
 from browser_optimizer.diff.diff import difference_engine
 from browser_optimizer.executor.executor import executor as action_executor
 from browser_optimizer.metrics.metrics import metrics
-from browser_optimizer.dashboard.server import start_dashboard_server
+from browser_optimizer.dashboard.server import start_dashboard_server, open_dashboard_in_browser
 from browser_optimizer.schemas.schemas import ReplayHandlePayload
 from browser_optimizer.recovery.manager import recovery_manager
 from browser_optimizer.discovery.manager import llms_discovery_manager
@@ -1140,6 +1140,25 @@ def invalidate_llms_cache(hostname: str) -> Dict[str, Any]:
         return _complete_result({"success": True, "message": f"Invalidated LLMS cache for host '{hostname}'."})
     except Exception as e:
         logger.error(f"Error in invalidate_llms_cache tool: {e}")
+        return _complete_result({"success": False, "error": str(e)})
+
+
+@mcp.tool()
+def open_dashboard() -> Dict[str, Any]:
+    """
+    Open the Mission Control live visual dashboard in the user's default web browser.
+    """
+    try:
+        opened = open_dashboard_in_browser()
+        url = f"http://localhost:{settings.DASHBOARD_PORT}/mission-control"
+        return _complete_result({
+            "success": True,
+            "opened": opened,
+            "url": url,
+            "message": f"Mission Control dashboard launched at {url}"
+        })
+    except Exception as e:
+        logger.error(f"Error opening dashboard: {e}")
         return _complete_result({"success": False, "error": str(e)})
 
 
