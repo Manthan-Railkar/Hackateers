@@ -10,6 +10,40 @@ from browser_optimizer.utils.logger import logger
 from browser_optimizer.cache.db import session_state_store
 
 
+class LiveScreenshotStore:
+    """
+    In-memory store holding the latest live screenshot, URL, title, and active action description
+    per session to stream live visual updates to the Mission Control dashboard.
+    """
+    def __init__(self):
+        self._store: Dict[str, Dict[str, Any]] = {}
+
+    def update(self, session_id: str, b64: str, url: str, title: str, action: str):
+        self._store[session_id] = {
+            "b64": b64,
+            "url": url,
+            "title": title,
+            "action": action
+        }
+
+    async def capture(self, page, session_id: str = "default", action: str = "Observing Page"):
+        try:
+            if page and hasattr(page, "screenshot") and not (hasattr(page, "is_closed") and page.is_closed()):
+                screenshot_bytes = await page.screenshot(type="jpeg", quality=60)
+                b64 = base64.b64encode(screenshot_bytes).decode("utf-8")
+                url = getattr(page, "url", "about:blank")
+                title = await page.title() if hasattr(page, "title") else ""
+                self.update(session_id, b64, url, title, action)
+        except Exception as e:
+            logger.debug(f"Live screenshot capture omitted: {e}")
+
+    def get(self, session_id: str = "default") -> Optional[Dict[str, Any]]:
+        return self._store.get(session_id)
+
+
+live_screenshot_store = LiveScreenshotStore()
+
+
 class BrowserManager:
     """
     Manages the lifecycle of a Playwright browser instance and standard page contexts
@@ -96,6 +130,7 @@ class BrowserManager:
         page = await self.get_page(session_id)
         await page.goto(url, timeout=settings.BROWSER_TIMEOUT, wait_until="domcontentloaded")
         await self.save_session_state(session_id)
+        await live_screenshot_store.capture(page, session_id, f"Navigated to {url}")
         return page
 
     async def save_session_state(self, session_id: str):
