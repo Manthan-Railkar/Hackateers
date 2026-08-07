@@ -31,6 +31,11 @@ class Settings:
     GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
     GROQ_VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "llama-3.2-11b-vision-preview")
 
+    # MCP 2026-07-28 Protocol Settings
+    MCP_PROTOCOL_VERSION = os.getenv("MCP_PROTOCOL_VERSION", "2026-07-28")
+    TOOLS_LIST_TTL_MS = int(os.getenv("TOOLS_LIST_TTL_MS", "300000"))  # 5 minutes
+    TOOLS_LIST_CACHE_SCOPE = os.getenv("TOOLS_LIST_CACHE_SCOPE", "public")
+
 
 
 # Instantiated settings for export

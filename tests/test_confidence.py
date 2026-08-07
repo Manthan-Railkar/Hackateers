@@ -4,7 +4,7 @@ from typing import Dict, Any
 
 from browser_optimizer.cache.cache import SemanticCache
 from browser_optimizer.cache.db import macro_store
-from browser_optimizer.server.main import extract_context, execute_action, replay_skill, resume_skill
+from browser_optimizer.server.main import extract_context, execute_action, replay_skill
 from browser_optimizer.browser.manager import manager
 from browser_optimizer.executor.executor import executor as action_executor
 
@@ -154,8 +154,12 @@ def test_macro_confidence_growth_and_decay():
 
 
 @pytest.mark.anyio
-async def test_macro_gating_and_suspension_flow():
-    """Test macro replay gating (<0.3), suspension on failure, and resumption."""
+async def test_macro_gating_and_mrtr_flow():
+    """
+    Test macro replay gating (<0.3) and MRTR (Multi Round-Trip Request) flow.
+    When a step fails, replay_skill returns resultType=input_required with a
+    replay_handle. The client retries with the handle to resume.
+    """
     # Create macro with 2 steps: one succeeds, one fails
     sequence = [
         {"action": "wait", "selector": None, "value": "10"}, # succeeds
@@ -163,28 +167,31 @@ async def test_macro_gating_and_suspension_flow():
     ]
     macro_id = macro_store.save_macro("Complex Skill", "DASHBOARD", sequence)
 
-    # 1. Replay skill (first step succeeds, second fails)
+    # 1. Replay skill (first step succeeds, second fails → input_required)
     res = await replay_skill(macro_id, {})
     assert res["success"] is False
+    assert res["_meta"]["resultType"] == "input_required"
     assert "Macro failed at step 1" in res["message"]
     assert res["failed_step_index"] == 1
+    assert "replay_handle" in res
 
-    # 2. Check that replay is suspended at next step (index 2)
-    from browser_optimizer.server import main as server_main
-    assert "default" in server_main.suspended_replays
-    assert server_main.suspended_replays["default"]["macro_id"] == macro_id
-    assert server_main.suspended_replays["default"]["next_step_index"] == 2
+    # 2. Verify the replay_handle contains the correct state
+    from browser_optimizer.server.main import decode_replay_handle
+    handle = decode_replay_handle(res["replay_handle"])
+    assert handle.macro_id == macro_id
+    assert handle.next_step_index == 2  # resume from step after the failed one
 
     # 3. Verify confidence dropped to 0.5 (0.8 - 0.3)
     macro = macro_store.get_macro(macro_id)
     assert macro is not None
     assert abs(macro["confidence"] - 0.5) < 1e-5
 
-    # 4. Resume skill. Since next_step_index == 2 is end of sequence, it should complete successfully
-    resume_res = await resume_skill({})
+    # 4. Resume by retrying replay_skill with the handle
+    # next_step_index == 2 is past end of sequence, so it completes successfully
+    resume_res = await replay_skill(macro_id, {}, replay_handle=res["replay_handle"])
+    assert resume_res["_meta"]["resultType"] == "complete"
     assert resume_res["success"] is True
-    assert "Successfully finished replaying" in resume_res["message"]
-    assert "default" not in server_main.suspended_replays
+    assert "Successfully replayed" in resume_res["message"]
 
     # 5. Check confidence grew to 0.55 (0.5 + 0.05)
     macro = macro_store.get_macro(macro_id)
@@ -194,5 +201,6 @@ async def test_macro_gating_and_suspension_flow():
     # 6. Force confidence below 0.3 to test gating
     macro_store.update_confidence(macro_id, success=False) # 0.55 - 0.3 = 0.25
     res = await replay_skill(macro_id, {})
+    assert res["_meta"]["resultType"] == "complete"
     assert res["success"] is False
     assert "confidence is too low" in res["message"]

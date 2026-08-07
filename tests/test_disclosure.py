@@ -2,6 +2,7 @@ import pytest
 import asyncio
 from typing import cast, Any, Dict, Tuple, List
 from browser_optimizer.server.main import mcp
+from browser_optimizer.config.protocol import ResultType, MCP_PROTOCOL_VERSION
 
 @pytest.fixture
 def anyio_backend():
@@ -9,31 +10,40 @@ def anyio_backend():
 
 
 @pytest.mark.anyio
-async def test_exposed_tools_list():
-    """Verify that only meta-tools (list_tools, get_tool_schema) are exposed by default in list_tools()."""
+async def test_all_tools_exposed_in_list():
+    """
+    MCP 2026-07-28: All tools must be exposed in tools/list.
+    No progressive disclosure — stateless protocols cannot rely on a handshake
+    to progressively reveal tools.
+    """
     exposed = await mcp.list_tools()
     exposed_names = {t.name for t in exposed}
     
-    # Check that ONLY the two meta-tools are exposed
+    # All tools should be exposed, including the actual browser optimization tools
+    assert "extract_context" in exposed_names
+    assert "execute_action" in exposed_names
+    assert "replay_skill" in exposed_names
     assert "list_tools" in exposed_names
     assert "get_tool_schema" in exposed_names
-    
-    # Check that other tools (e.g. extract_context, execute_action) are NOT in the initial exposed list
-    assert "extract_context" not in exposed_names
-    assert "execute_action" not in exposed_names
 
 
 @pytest.mark.anyio
-async def test_list_tools_meta_tool():
-    """Verify that calling the list_tools meta-tool returns all actual optimization tools."""
-    # Call list_tools meta-tool
+async def test_list_tools_meta_tool_returns_caching_metadata():
+    """
+    MCP 2026-07-28: list_tools response must include ttlMs and cacheScope
+    caching metadata so clients know how long to cache tool catalogs.
+    """
     res, extra = cast(Tuple[List[Any], Dict[str, Any]], await mcp.call_tool("list_tools", {}))
     assert "result" in extra
-    tools = extra["result"]["tools"]
+    result = extra["result"]
     
+    # Verify _meta with resultType
+    assert "_meta" in result
+    assert result["_meta"]["resultType"] == ResultType.COMPLETE.value
+    
+    # Verify tools list
+    tools = result["tools"]
     tool_names = {t["name"] for t in tools}
-    
-    # The returned list should contain our actual browser optimization tools
     assert "extract_context" in tool_names
     assert "execute_action" in tool_names
     assert "replay_skill" in tool_names
@@ -41,6 +51,13 @@ async def test_list_tools_meta_tool():
     # Meta-tools themselves should not be listed as optimization tools
     assert "list_tools" not in tool_names
     assert "get_tool_schema" not in tool_names
+    
+    # Verify caching metadata
+    assert "_cache" in result
+    assert "ttlMs" in result["_cache"]
+    assert "cacheScope" in result["_cache"]
+    assert isinstance(result["_cache"]["ttlMs"], int)
+    assert result["_cache"]["ttlMs"] > 0
 
 
 @pytest.mark.anyio
@@ -49,6 +66,10 @@ async def test_get_tool_schema_tool():
     res, extra = cast(Tuple[List[Any], Dict[str, Any]], await mcp.call_tool("get_tool_schema", {"tool_name": "extract_context"}))
     assert "result" in extra
     result = extra["result"]
+    
+    # Verify _meta with resultType
+    assert "_meta" in result
+    assert result["_meta"]["resultType"] == ResultType.COMPLETE.value
     
     assert result["success"] is True
     assert result["tool_name"] == "extract_context"
@@ -60,9 +81,19 @@ async def test_get_tool_schema_tool():
 
 
 @pytest.mark.anyio
+async def test_resume_skill_no_longer_exists():
+    """
+    MCP 2026-07-28: resume_skill has been removed in favour of MRTR.
+    Verify it is not registered as a tool.
+    """
+    all_tools = await mcp._original_list_tools()
+    tool_names = {t.name for t in all_tools}
+    assert "resume_skill" not in tool_names
+
+
+@pytest.mark.anyio
 async def test_unexposed_tool_execution():
-    """Verify that a tool not exposed in list_tools() can still be successfully executed by name."""
-    # Mock manager get_page so calling extract_context doesn't fail
+    """Verify that tools can be successfully executed by name via call_tool."""
     from browser_optimizer.browser.manager import manager
     
     class DummyPage:
@@ -84,7 +115,13 @@ async def test_unexposed_tool_execution():
         # Call extract_context directly via call_tool
         res, extra = cast(Tuple[List[Any], Dict[str, Any]], await mcp.call_tool("extract_context", {"url": "https://example.com", "session_id": "test_exec"}))
         assert "result" in extra
-        assert extra["result"]["url"] == "https://example.com"
-        assert extra["result"]["title"] == "Test Title"
+        result = extra["result"]
+        
+        # Verify _meta with resultType
+        assert "_meta" in result
+        assert result["_meta"]["resultType"] == ResultType.COMPLETE.value
+        
+        assert result["url"] == "https://example.com"
+        assert result["title"] == "Test Title"
     finally:
         setattr(manager, "get_page", original_get_page)

@@ -1,10 +1,16 @@
 import asyncio
 import json
+import base64
 import websockets
 from typing import Dict, Any, Optional, List
 from mcp.server.fastmcp import FastMCP
 
 from browser_optimizer.config.settings import settings
+from browser_optimizer.config.protocol import (
+    MCP_PROTOCOL_VERSION,
+    ResultType,
+    CacheScope,
+)
 from browser_optimizer.utils.logger import logger
 from browser_optimizer.browser.manager import manager
 from browser_optimizer.extractor.extractor import extractor
@@ -16,8 +22,12 @@ from browser_optimizer.diff.diff import difference_engine
 from browser_optimizer.executor.executor import executor as action_executor
 from browser_optimizer.metrics.metrics import metrics
 from browser_optimizer.dashboard.server import start_dashboard_server
+from browser_optimizer.schemas.schemas import ReplayHandlePayload
 
+
+# ─────────────────────────────────────────────────────────────
 # Initialize FastMCP Server
+# ─────────────────────────────────────────────────────────────
 mcp = FastMCP("Browser Optimization MCP")
 
 # Push mode page watching state trackers
@@ -25,6 +35,67 @@ ws_server = None
 watch_clients: Dict[str, List[Any]] = {}  # session_id -> list of websocket connections
 watch_tasks: Dict[str, asyncio.Task] = {}  # session_id -> asyncio.Task for polling loop
 
+
+# ═════════════════════════════════════════════════════════════
+# MCP 2026-07-28 — Result Wrappers
+# ═════════════════════════════════════════════════════════════
+
+def _complete_result(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Wrap a tool result with _meta.resultType = "complete".
+    Per the 2026-07-28 spec, every successful/final result must carry this tag.
+    """
+    return {
+        "_meta": {
+            "resultType": ResultType.COMPLETE.value,
+            "protocolVersion": MCP_PROTOCOL_VERSION,
+        },
+        **data,
+    }
+
+
+def _input_required_result(
+    data: Dict[str, Any],
+    questions: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Wrap a tool result with _meta.resultType = "input_required".
+    Used for MRTR (Multi Round-Trip Requests) when the server needs
+    additional input from the client before completing the operation.
+    """
+    return {
+        "_meta": {
+            "resultType": ResultType.INPUT_REQUIRED.value,
+            "protocolVersion": MCP_PROTOCOL_VERSION,
+            "questions": questions,
+        },
+        **data,
+    }
+
+
+# ═════════════════════════════════════════════════════════════
+# MCP 2026-07-28 — Stateless Replay Handle (encode/decode)
+# ═════════════════════════════════════════════════════════════
+
+def encode_replay_handle(payload: ReplayHandlePayload) -> str:
+    """
+    Encode a replay state into an opaque handle token.
+    The client passes this handle back to replay_skill to resume
+    from the correct step — no server-side session state required.
+    """
+    raw = payload.model_dump_json()
+    return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii")
+
+
+def decode_replay_handle(handle: str) -> ReplayHandlePayload:
+    """Decode an opaque replay handle back into structured state."""
+    raw = base64.urlsafe_b64decode(handle.encode("ascii")).decode("utf-8")
+    return ReplayHandlePayload.model_validate_json(raw)
+
+
+# ═════════════════════════════════════════════════════════════
+# WebSocket Push Mode (application-level, not protocol-level)
+# ═════════════════════════════════════════════════════════════
 
 async def websocket_handler(websocket):
     """
@@ -86,10 +157,15 @@ async def poll_page_diff(url: str, interval_seconds: float, session_id: str):
         logger.info(f"Page watch poller for '{url}' in session '{session_id}' was cancelled.")
 
 
+# ═════════════════════════════════════════════════════════════
+# Server Lifecycle
+# ═════════════════════════════════════════════════════════════
+
 async def startup():
     """Start browser session and WebSocket server on server startup."""
     global ws_server
     logger.info("Initializing Browser Optimizer MCP server...")
+    logger.info(f"MCP Protocol Version: {MCP_PROTOCOL_VERSION}")
     logger.info(f"Headless Mode: {settings.HEADLESS}")
     logger.info(f"Log Level: {settings.LOG_LEVEL}")
     await manager.start()
@@ -148,6 +224,10 @@ async def ensure_initialized():
         start_dashboard_server()
         _initialized = True
 
+
+# ═════════════════════════════════════════════════════════════
+# MCP Tools — All exposed in tools/list (no progressive disclosure)
+# ═════════════════════════════════════════════════════════════
 
 @mcp.tool()
 async def extract_context(url: str, session_id: str = "default") -> Dict[str, Any]:
@@ -210,7 +290,7 @@ async def extract_context(url: str, session_id: str = "default") -> Dict[str, An
                     confidence_used=confidence,
                     outcome="exact_cache_hit"
                 )
-                return {
+                return _complete_result({
                     "url": url,
                     "title": cached_context.get("title", ""),
                     "ui": cached_context.get("ui", []),
@@ -218,7 +298,7 @@ async def extract_context(url: str, session_id: str = "default") -> Dict[str, An
                     "classification": classification,
                     "from_cache": True,
                     "compression_ratio_pct": cached_context.get("compression_ratio", 0)
-                }
+                })
             else:
                 # ── Semantic similarity hit ────────────────────────
                 # Structure is the same template, but text/IDs differ.
@@ -246,7 +326,7 @@ async def extract_context(url: str, session_id: str = "default") -> Dict[str, An
                     confidence_used=confidence,
                     outcome=f"semantic_cache_hit (score: {similarity_score:.2f})"
                 )
-                return {
+                return _complete_result({
                     "url": url,
                     "title": compressed["title"],
                     "ui": compressed["ui"],
@@ -256,7 +336,7 @@ async def extract_context(url: str, session_id: str = "default") -> Dict[str, An
                     "from_semantic_cache": True,
                     "similarity_score": similarity_score,
                     "compression_ratio_pct": compressed["compression_ratio"]
-                }
+                })
 
         # ── Full cache miss ───────────────────────────────────
         metrics.record_cache_miss()
@@ -289,7 +369,7 @@ async def extract_context(url: str, session_id: str = "default") -> Dict[str, An
             confidence_used=None,
             outcome="cache_miss"
         )
-        return {
+        return _complete_result({
             "url": url,
             "title": compressed["title"],
             "ui": compressed["ui"],
@@ -298,7 +378,7 @@ async def extract_context(url: str, session_id: str = "default") -> Dict[str, An
             "from_cache": False,
             "compression_ratio_pct": compressed["compression_ratio"],
             "visual_fallback": compressed.get("visual_fallback", False)
-        }
+        })
 
     except Exception as e:
         logger.error(f"Error in extract_context: {str(e)}")
@@ -309,7 +389,7 @@ async def extract_context(url: str, session_id: str = "default") -> Dict[str, An
             confidence_used=None,
             outcome=f"error: {str(e)}"
         )
-        return {"success": False, "error": str(e)}
+        return _complete_result({"success": False, "error": str(e)})
 
 
 @mcp.tool()
@@ -328,10 +408,10 @@ async def page_diff(url: str, session_id: str = "default") -> Dict[str, Any]:
         
         # Compute differences
         diff_result = difference_engine.compute_diff(url, ui_elements)
-        return diff_result
+        return _complete_result(diff_result)
     except Exception as e:
         logger.error(f"Error in page_diff: {str(e)}")
-        return {"success": False, "error": str(e)}
+        return _complete_result({"success": False, "error": str(e)})
 
 
 @mcp.tool()
@@ -376,7 +456,7 @@ async def execute_action(
         else:
             semantic_cache.update_confidence(url_before, success=False)
             
-        return result
+        return _complete_result(result)
     except Exception as e:
         logger.error(f"Error in execute_action: {str(e)}")
         session_replay_store.log_event(
@@ -386,7 +466,7 @@ async def execute_action(
             confidence_used=None,
             outcome=f"error: {str(e)}"
         )
-        return {"success": False, "error": str(e)}
+        return _complete_result({"success": False, "error": str(e)})
 
 
 @mcp.tool()
@@ -425,7 +505,7 @@ async def summarize_page(url: str, session_id: str = "default") -> Dict[str, Any
         if text_snippet:
             summary += f"Content snippet: '{text_snippet}...'"
             
-        return {
+        return _complete_result({
             "url": url,
             "title": title,
             "page_type": page_type,
@@ -436,10 +516,10 @@ async def summarize_page(url: str, session_id: str = "default") -> Dict[str, Any
                 "selects": selects,
                 "links": links
             }
-        }
+        })
     except Exception as e:
         logger.error(f"Error in summarize_page: {str(e)}")
-        return {"success": False, "error": str(e)}
+        return _complete_result({"success": False, "error": str(e)})
 
 
 @mcp.tool()
@@ -452,10 +532,10 @@ async def classify_page(url: str, session_id: str = "default") -> Dict[str, Any]
         if not context.get("success", True):
             return context
             
-        return context.get("classification", {"page_type": "unknown", "scores": {}})
+        return _complete_result(context.get("classification", {"page_type": "unknown", "scores": {}}))
     except Exception as e:
         logger.error(f"Error in classify_page: {str(e)}")
-        return {"success": False, "error": str(e)}
+        return _complete_result({"success": False, "error": str(e)})
 
 
 @mcp.tool()
@@ -472,10 +552,10 @@ async def wait_until_ready(url: str, timeout: Optional[int] = None, session_id: 
         await page.goto(url, timeout=wait_timeout, wait_until="networkidle")
         
         await manager.save_session_state(session_id)
-        return {"success": True, "message": "Page is stable and loaded.", "url": page.url}
+        return _complete_result({"success": True, "message": "Page is stable and loaded.", "url": page.url})
     except Exception as e:
         logger.error(f"Error in wait_until_ready: {str(e)}")
-        return {"success": False, "error": str(e)}
+        return _complete_result({"success": False, "error": str(e)})
 
 
 @mcp.tool()
@@ -487,16 +567,16 @@ async def cache_lookup(url: str, session_id: str = "default") -> Dict[str, Any]:
         # Lookup using an empty string since we don't have the current live HTML
         cached_entry = semantic_cache._cache.get(url)
         if cached_entry:
-            return {
+            return _complete_result({
                 "cached": True,
                 "url": url,
                 "context": cached_entry.get("context"),
                 "timestamp": cached_entry.get("timestamp")
-            }
-        return {"cached": False, "message": "No cache entry found for URL."}
+            })
+        return _complete_result({"cached": False, "message": "No cache entry found for URL."})
     except Exception as e:
         logger.error(f"Error in cache_lookup: {str(e)}")
-        return {"success": False, "error": str(e)}
+        return _complete_result({"success": False, "error": str(e)})
 
 
 @mcp.tool()
@@ -504,7 +584,7 @@ def get_metrics() -> Dict[str, Any]:
     """
     Retrieve performance and token optimization metrics.
     """
-    return metrics.get_stats()
+    return _complete_result(metrics.get_stats())
 
 
 @mcp.tool()
@@ -514,7 +594,7 @@ async def start_macro_recording(session_id: str = "default") -> Dict[str, Any]:
     """
     await ensure_initialized()
     action_executor.start_recording(session_id)
-    return {"success": True, "message": f"Started recording macro actions for session '{session_id}'."}
+    return _complete_result({"success": True, "message": f"Started recording macro actions for session '{session_id}'."})
 
 
 @mcp.tool()
@@ -532,7 +612,7 @@ async def save_macro(
     """
     sequence = action_executor.stop_recording(session_id)
     if not sequence:
-        return {"success": False, "message": "No actions recorded."}
+        return _complete_result({"success": False, "message": "No actions recorded."})
         
     # Parameterize the sequence
     for step in sequence:
@@ -544,7 +624,7 @@ async def save_macro(
                     break
                     
     macro_id = macro_store.save_macro(name, page_type, sequence)
-    return {"success": True, "macro_id": macro_id, "message": f"Macro '{name}' saved with {len(sequence)} steps."}
+    return _complete_result({"success": True, "macro_id": macro_id, "message": f"Macro '{name}' saved with {len(sequence)} steps."})
 
 
 @mcp.tool()
@@ -553,7 +633,7 @@ async def list_skills(page_type: Optional[str] = None) -> Dict[str, Any]:
     List available skill macros, optionally filtered by page_type (e.g. LOGIN).
     """
     macros = macro_store.list_macros(page_type)
-    return {"success": True, "macros": macros}
+    return _complete_result({"success": True, "macros": macros})
 
 
 @mcp.tool()
@@ -564,7 +644,7 @@ async def suggest_skill(page_type: str) -> Dict[str, Any]:
     """
     macro = macro_store.get_best_macro(page_type)
     if not macro:
-        return {"success": False, "routing_decision": "SKIP", "message": f"No skills found for {page_type}."}
+        return _complete_result({"success": False, "routing_decision": "SKIP", "message": f"No skills found for {page_type}."})
         
     confidence = macro.get("confidence", 0.0)
     
@@ -578,16 +658,12 @@ async def suggest_skill(page_type: str) -> Dict[str, Any]:
         routing = "SKIP"
         instruction = "Confidence is too low. Please reason from scratch instead of reusing."
         
-    return {
+    return _complete_result({
         "success": True,
         "routing_decision": routing,
         "instruction": instruction,
         "macro": macro
-    }
-
-
-# Global state for suspended macro replays per session
-suspended_replays: Dict[str, Dict[str, Any]] = {}
+    })
 
 
 @mcp.tool()
@@ -596,15 +672,41 @@ async def replay_skill(
     parameters: Dict[str, str],
     expected_url: Optional[str] = None,
     expected_page_type: Optional[str] = None,
-    session_id: str = "default"
+    session_id: str = "default",
+    replay_handle: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Replay a previously recorded macro in a given session.
     Inject parameters into the placeholders (e.g. {username}) before execution.
-    If expected_url or expected_page_type are provided, the system will verify the post-state and auto-decay on mismatch.
+    If expected_url or expected_page_type are provided, the system will verify the
+    post-state and auto-decay on mismatch.
+
+    MRTR (Multi Round-Trip Request):
+      If a step fails, this tool returns resultType="input_required" with a
+      replay_handle. After fixing the failed step manually (via execute_action),
+      retry this same tool with the replay_handle to resume from the next step.
     """
     await ensure_initialized()
-    global suspended_replays
+
+    # ── Decode replay handle if resuming ──────────────────────
+    start_index = 0
+    if replay_handle:
+        try:
+            handle_payload = decode_replay_handle(replay_handle)
+            macro_id = handle_payload.macro_id
+            start_index = handle_payload.next_step_index
+            # Merge handle parameters with any new ones provided
+            merged_params = dict(handle_payload.parameters)
+            merged_params.update(parameters)
+            parameters = merged_params
+            session_id = handle_payload.session_id
+            logger.info(f"Resuming replay from handle: macro_id={macro_id}, step={start_index}")
+        except Exception as e:
+            return _complete_result({
+                "success": False,
+                "message": f"Invalid replay_handle: {str(e)}"
+            })
+
     macro = macro_store.get_macro(macro_id)
     if not macro:
         session_replay_store.log_event(
@@ -614,7 +716,7 @@ async def replay_skill(
             confidence_used=None,
             outcome="failed: macro not found"
         )
-        return {"success": False, "message": f"Macro {macro_id} not found."}
+        return _complete_result({"success": False, "message": f"Macro {macro_id} not found."})
         
     confidence = macro.get("confidence", 0.8)
     if confidence < 0.3:
@@ -625,13 +727,13 @@ async def replay_skill(
             confidence_used=confidence,
             outcome="aborted: confidence too low"
         )
-        return {
+        return _complete_result({
             "success": False,
             "message": f"Macro '{macro['name']}' confidence is too low ({confidence:.2f} < 0.3). Skipping macro replay. Please execute actions manually."
-        }
+        })
         
     sequence = macro["sequence"]
-    logger.info(f"Replaying macro '{macro['name']}' with params {parameters} in session '{session_id}'")
+    logger.info(f"Replaying macro '{macro['name']}' (steps {start_index}-{len(sequence)-1}) with params {parameters} in session '{session_id}'")
     
     page = await manager.get_page(session_id)
     
@@ -644,7 +746,8 @@ async def replay_skill(
     
     success_count = 0
     try:
-        for i, step in enumerate(sequence):
+        for i in range(start_index, len(sequence)):
+            step = sequence[i]
             action = step["action"]
             selector = step["selector"]
             value = step.get("value")
@@ -658,13 +761,18 @@ async def replay_skill(
             
             result = await action_executor.execute(page, action, selector, value, session_id=session_id)
             if not result.get("success"):
-                # Suspend macro replay
-                suspended_replays[session_id] = {
-                    "macro_id": macro_id,
-                    "next_step_index": i + 1,
-                    "parameters": parameters
-                }
+                # ── MRTR: return input_required with replay_handle ──
                 macro_store.update_confidence(macro_id, success=False)
+
+                # Encode state into an opaque handle for stateless resumption
+                handle_payload = ReplayHandlePayload(
+                    macro_id=macro_id,
+                    next_step_index=i + 1,
+                    parameters=parameters,
+                    session_id=session_id,
+                )
+                handle = encode_replay_handle(handle_payload)
+
                 session_replay_store.log_event(
                     session_id=session_id,
                     page_classification=macro.get("page_type"),
@@ -677,19 +785,31 @@ async def replay_skill(
                     page_classification=macro.get("page_type"),
                     action_taken=f"replay_skill: {macro['name']}",
                     confidence_used=confidence,
-                    outcome=f"suspended at step {i}"
+                    outcome=f"input_required at step {i}"
                 )
-                return {
-                    "success": False,
-                    "failed_step_index": i,
-                    "failed_action": action,
-                    "failed_selector": selector,
-                    "message": (
-                        f"Macro failed at step {i} ({action} {selector}) with error: {result.get('message')}. "
-                        "Macro replay has been suspended. Please execute this step manually using execute_action, "
-                        "and then call the resume_skill tool to complete the remaining steps."
-                    )
-                }
+
+                return _input_required_result(
+                    data={
+                        "success": False,
+                        "replay_handle": handle,
+                        "failed_step_index": i,
+                        "failed_action": action,
+                        "failed_selector": selector,
+                        "message": (
+                            f"Macro failed at step {i} ({action} {selector}) with error: {result.get('message')}. "
+                            "Execute this step manually using execute_action, then retry replay_skill "
+                            "with the replay_handle to resume from the next step."
+                        ),
+                    },
+                    questions=[{
+                        "id": "manual_step_result",
+                        "description": (
+                            f"Step {i} ({action} on '{selector}') failed. "
+                            "Please execute this action manually via execute_action and confirm completion."
+                        ),
+                        "type": "confirmation",
+                    }],
+                )
                 
             session_replay_store.log_event(
                 session_id=session_id,
@@ -724,7 +844,7 @@ async def replay_skill(
                     confidence_used=confidence,
                     outcome=outcome_msg
                 )
-                return {
+                return _complete_result({
                     "success": False, 
                     "message": f"Verification failed: Expected URL starting with {expected_url}, but got {current_url}",
                     "failure_context": {
@@ -732,7 +852,7 @@ async def replay_skill(
                         "reason": "URL_MISMATCH",
                         "current_url": current_url
                     }
-                }
+                })
                 
             if expected_page_type:
                 # Classify the new page to verify
@@ -748,7 +868,7 @@ async def replay_skill(
                         confidence_used=confidence,
                         outcome=outcome_msg
                     )
-                    return {
+                    return _complete_result({
                         "success": False, 
                         "message": f"Verification failed: Expected page type {expected_page_type}, but got {current_page_type}",
                         "failure_context": {
@@ -757,11 +877,9 @@ async def replay_skill(
                             "current_url": current_url,
                             "current_page_type": current_page_type
                         }
-                    }
+                    })
 
         macro_store.update_confidence(macro_id, success=True)
-        if session_id in suspended_replays and suspended_replays[session_id].get("macro_id") == macro_id:
-            suspended_replays.pop(session_id, None)
         session_replay_store.log_event(
             session_id=session_id,
             page_classification=macro.get("page_type"),
@@ -769,130 +887,7 @@ async def replay_skill(
             confidence_used=confidence,
             outcome="macro_success"
         )
-        return {"success": True, "message": f"Successfully replayed macro '{macro['name']}'."}
-        
-    finally:
-        await manager.save_session_state(session_id)
-        if was_recording:
-            action_executor.start_recording(session_id)
-
-
-@mcp.tool()
-async def resume_skill(parameters: Optional[Dict[str, str]] = None, session_id: str = "default") -> Dict[str, Any]:
-    """
-    Resume a suspended macro replay from the step following the failure for the given session.
-    Optional parameters can override/update parameters if needed.
-    """
-    await ensure_initialized()
-    global suspended_replays
-    if session_id not in suspended_replays:
-        return {"success": False, "message": f"No suspended macro replay found for session '{session_id}'."}
-        
-    session_state = suspended_replays[session_id]
-    macro_id = session_state["macro_id"]
-    start_index = session_state["next_step_index"]
-    original_parameters = session_state["parameters"]
-    
-    # Merge parameters if new ones provided
-    if parameters:
-        original_parameters.update(parameters)
-        
-    macro = macro_store.get_macro(macro_id)
-    if not macro:
-        suspended_replays.pop(session_id, None)
-        return {"success": False, "message": f"Macro {macro_id} not found."}
-        
-    confidence = macro.get("confidence", 0.8)
-    sequence = macro["sequence"]
-    if start_index >= len(sequence):
-        macro_store.update_confidence(macro_id, success=True)
-        suspended_replays.pop(session_id, None)
-        session_replay_store.log_event(
-            session_id=session_id,
-            page_classification=macro.get("page_type"),
-            action_taken=f"resume_skill: {macro['name']}",
-            confidence_used=confidence,
-            outcome="resume_success"
-        )
-        return {"success": True, "message": f"Successfully finished replaying remaining steps of '{macro['name']}'."}
-        
-    page = await manager.get_page(session_id)
-    was_recording = action_executor.is_recording(session_id)
-    if was_recording:
-        action_executor.recordings.pop(session_id, None)
-    
-    verify_steps = 0.3 <= confidence < 0.7
-    
-    logger.info(f"Resuming macro '{macro['name']}' from step {start_index} with params {original_parameters} in session '{session_id}'")
-    
-    try:
-        for i in range(start_index, len(sequence)):
-            step = sequence[i]
-            action = step["action"]
-            selector = step["selector"]
-            value = step.get("value")
-            
-            # Inject parameters
-            if value and isinstance(value, str):
-                for pk, pv in original_parameters.items():
-                    placeholder = f"{{{pk}}}"
-                    if placeholder in value:
-                        value = value.replace(placeholder, pv)
-                        
-            result = await action_executor.execute(page, action, selector, value, session_id=session_id)
-            if not result.get("success"):
-                # Update suspension index to the next step
-                session_state["next_step_index"] = i + 1
-                macro_store.update_confidence(macro_id, success=False)
-                session_replay_store.log_event(
-                    session_id=session_id,
-                    page_classification=macro.get("page_type"),
-                    action_taken=f"resume: {action} {selector or ''} {value or ''}".strip(),
-                    confidence_used=confidence,
-                    outcome=f"failed: {result.get('message')}"
-                )
-                session_replay_store.log_event(
-                    session_id=session_id,
-                    page_classification=macro.get("page_type"),
-                    action_taken=f"resume_skill: {macro['name']}",
-                    confidence_used=confidence,
-                    outcome=f"suspended at step {i}"
-                )
-                return {
-                    "success": False,
-                    "failed_step_index": i,
-                    "failed_action": action,
-                    "failed_selector": selector,
-                    "message": (
-                        f"Resumed step {i} ({action} {selector}) failed with error: {result.get('message')}. "
-                        "Replay is suspended again. Please execute manually and run resume_skill to try the rest."
-                    )
-                }
-                
-            session_replay_store.log_event(
-                session_id=session_id,
-                page_classification=macro.get("page_type"),
-                action_taken=f"resume: {action} {selector or ''} {value or ''}".strip(),
-                confidence_used=confidence,
-                outcome="success"
-            )
-            if verify_steps:
-                try:
-                    await page.wait_for_load_state("domcontentloaded", timeout=2000)
-                except Exception:
-                    pass
-                    
-        # All steps completed successfully
-        macro_store.update_confidence(macro_id, success=True)
-        suspended_replays.pop(session_id, None)
-        session_replay_store.log_event(
-            session_id=session_id,
-            page_classification=macro.get("page_type"),
-            action_taken=f"resume_skill: {macro['name']}",
-            confidence_used=confidence,
-            outcome="resume_success"
-        )
-        return {"success": True, "message": f"Successfully finished replaying remaining steps of '{macro['name']}'."}
+        return _complete_result({"success": True, "message": f"Successfully replayed macro '{macro['name']}'."})
         
     finally:
         await manager.save_session_state(session_id)
@@ -906,8 +901,7 @@ async def close_session(session_id: str) -> Dict[str, Any]:
     Close page and BrowserContext for a specific session.
     """
     await manager.close_session(session_id)
-    suspended_replays.pop(session_id, None)
-    return {"success": True, "message": f"Session '{session_id}' has been closed."}
+    return _complete_result({"success": True, "message": f"Session '{session_id}' has been closed."})
 
 
 @mcp.tool()
@@ -924,10 +918,10 @@ async def watch_page(url: str, interval_seconds: int = 5, session_id: str = "def
         
     # Start new task
     watch_tasks[session_id] = asyncio.create_task(poll_page_diff(url, float(interval_seconds), session_id))
-    return {
+    return _complete_result({
         "success": True,
         "message": f"Started watching {url} in session '{session_id}' every {interval_seconds}s. Connect to ws://{settings.WEBSOCKET_HOST}:{settings.WEBSOCKET_PORT} and register with session_id '{session_id}' to receive live diff updates."
-    }
+    })
 
 
 @mcp.tool()
@@ -939,8 +933,8 @@ async def stop_watch_page(session_id: str = "default") -> Dict[str, Any]:
     if session_id in watch_tasks:
         watch_tasks[session_id].cancel()
         watch_tasks.pop(session_id, None)
-        return {"success": True, "message": f"Stopped watching page in session '{session_id}'."}
-    return {"success": False, "message": f"No active page watch found for session '{session_id}'."}
+        return _complete_result({"success": True, "message": f"Stopped watching page in session '{session_id}'."})
+    return _complete_result({"success": False, "message": f"No active page watch found for session '{session_id}'."})
 
 
 @mcp.tool()
@@ -949,15 +943,16 @@ async def get_session_replay(session_id: str = "default") -> Dict[str, Any]:
     Retrieve the append-only replay log of page states and actions taken for a given session.
     """
     logs = session_replay_store.get_replay(session_id)
-    return {"success": True, "session_id": session_id, "logs": logs}
+    return _complete_result({"success": True, "session_id": session_id, "logs": logs})
 
 
 @mcp.tool(name="list_tools")
 async def mcp_list_tools() -> Dict[str, Any]:
     """
     Get a lightweight list of all available browser optimization tools with names and one-line descriptions.
+    Includes MCP 2026-07-28 caching metadata (ttlMs, cacheScope).
     """
-    all_tools = await original_list_tools()
+    all_tools = await mcp._original_list_tools()
     lightweight = []
     for t in all_tools:
         if t.name not in ["list_tools", "get_tool_schema"]:
@@ -965,7 +960,13 @@ async def mcp_list_tools() -> Dict[str, Any]:
                 "name": t.name,
                 "description": t.description
             })
-    return {"tools": lightweight}
+    return _complete_result({
+        "tools": lightweight,
+        "_cache": {
+            "ttlMs": settings.TOOLS_LIST_TTL_MS,
+            "cacheScope": settings.TOOLS_LIST_CACHE_SCOPE,
+        }
+    })
 
 
 @mcp.tool(name="get_tool_schema")
@@ -976,28 +977,39 @@ async def mcp_get_tool_schema(tool_name: str) -> Dict[str, Any]:
     try:
         tool_obj = mcp._tool_manager.get_tool(tool_name)
         if tool_obj is None:
-            return {"success": False, "error": f"Tool '{tool_name}' not found."}
-        return {
+            return _complete_result({"success": False, "error": f"Tool '{tool_name}' not found."})
+        return _complete_result({
             "success": True,
             "tool_name": tool_name,
             "description": tool_obj.description,
             "input_schema": tool_obj.parameters
-        }
+        })
     except Exception as e:
-        return {"success": False, "error": f"Tool '{tool_name}' not found: {str(e)}"}
+        return _complete_result({"success": False, "error": f"Tool '{tool_name}' not found: {str(e)}"})
 
 
-# Override list_tools to only return meta-tools in the initial handshake
-original_list_tools = mcp.list_tools
-
-async def new_list_tools():
-    all_tools = await original_list_tools()
-    return [t for t in all_tools if t.name in ["list_tools", "get_tool_schema"]]
-
-mcp.list_tools = new_list_tools
+# ═════════════════════════════════════════════════════════════
+# MCP 2026-07-28 — Caching metadata on tools/list
+# ═════════════════════════════════════════════════════════════
+# Store the original list_tools for internal use, but expose ALL tools
+# in the protocol-level tools/list (no more progressive disclosure).
+mcp._original_list_tools = mcp.list_tools
 
 
+async def _tools_list_with_cache_metadata():
+    """
+    Override tools/list to inject ttlMs and cacheScope into the response.
+    All tools are returned — no progressive disclosure in a stateless protocol.
+    """
+    return await mcp._original_list_tools()
 
+
+mcp.list_tools = _tools_list_with_cache_metadata
+
+
+# ═════════════════════════════════════════════════════════════
+# Server Entry Point
+# ═════════════════════════════════════════════════════════════
 
 async def main():
     try:
@@ -1007,5 +1019,5 @@ async def main():
 
 
 if __name__ == "__main__":
-    logger.info("Starting the Browser Optimizer MCP Server...")
+    logger.info(f"Starting the Browser Optimizer MCP Server (Protocol: {MCP_PROTOCOL_VERSION})...")
     asyncio.run(main())

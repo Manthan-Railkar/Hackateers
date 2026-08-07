@@ -44,3 +44,34 @@ class CacheEntry(BaseModel):
     url: str
     compressed_context: Dict[str, Any]
     timestamp: float
+
+
+# ─────────────────────────────────────────────────────────────
+# MCP 2026-07-28 Protocol Models
+# ─────────────────────────────────────────────────────────────
+
+class MCPResultMeta(BaseModel):
+    """Metadata block injected into every MCP tool result under the `_meta` key."""
+    resultType: str = "complete"  # "complete" | "input_required"
+    ttlMs: Optional[int] = None
+    cacheScope: Optional[str] = None  # "public" | "private"
+
+
+class InputRequiredQuestion(BaseModel):
+    """A single question the server asks the client during an MRTR flow."""
+    id: str
+    description: str
+    type: str = "confirmation"  # "confirmation" | "text" | "choice"
+    options: Optional[List[str]] = None
+
+
+class ReplayHandlePayload(BaseModel):
+    """
+    Encoded into an opaque replay_handle token for stateless MRTR replay resumption.
+    The client passes this handle back to replay_skill to resume from the correct step.
+    """
+    macro_id: int
+    next_step_index: int
+    parameters: Dict[str, str]
+    session_id: str = "default"
+

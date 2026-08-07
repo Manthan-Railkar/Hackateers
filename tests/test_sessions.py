@@ -7,11 +7,13 @@ from browser_optimizer.server.main import (
     extract_context,
     execute_action,
     replay_skill,
-    resume_skill,
     start_macro_recording,
     save_macro,
-    close_session
+    close_session,
+    encode_replay_handle,
+    decode_replay_handle,
 )
+from browser_optimizer.schemas.schemas import ReplayHandlePayload
 from browser_optimizer.cache.db import macro_store
 
 
@@ -122,39 +124,58 @@ async def test_session_isolated_recording():
 
 
 @pytest.mark.anyio
-async def test_session_isolated_suspension_states():
-    """Test that separate sessions can maintain independent macro suspension states concurrently."""
-    # Create macro with failing second step
+async def test_session_isolated_mrtr_replay():
+    """
+    Test that MRTR replay handles work correctly across independent sessions.
+    When a macro fails, it returns resultType=input_required with a replay_handle.
+    The client retries with the handle to resume — no server-side suspension state.
+    """
+    # Create separate macros for each session to avoid shared confidence decay
     sequence = [
         {"action": "click", "selector": "#ok", "value": None},
         {"action": "click", "selector": "#fail", "value": None}
     ]
-    macro_id = macro_store.save_macro("Failing Macro", "TEST", sequence)
+    macro_id_a = macro_store.save_macro("Failing Macro A", "TEST", sequence)
+    macro_id_b = macro_store.save_macro("Failing Macro B", "TEST", list(sequence))
 
-    # Replay on session A -> fails on second step -> suspends
-    res_a = await replay_skill(macro_id, {}, session_id="sessionA")
-    assert res_a["success"] is False
+    # Replay on session A -> fails on second step -> returns input_required
+    res_a = await replay_skill(macro_id_a, {}, session_id="sessionA")
+    assert res_a["_meta"]["resultType"] == "input_required"
     assert res_a["failed_step_index"] == 1
+    assert "replay_handle" in res_a
+    handle_a = res_a["replay_handle"]
 
-    # Replay on session B -> fails on second step -> suspends
-    res_b = await replay_skill(macro_id, {}, session_id="sessionB")
-    assert res_b["success"] is False
+    # Replay on session B -> fails on second step -> returns input_required
+    res_b = await replay_skill(macro_id_b, {}, session_id="sessionB")
+    assert res_b["_meta"]["resultType"] == "input_required"
     assert res_b["failed_step_index"] == 1
+    assert "replay_handle" in res_b
+    handle_b = res_b["replay_handle"]
 
-    from browser_optimizer.server.main import suspended_replays
-    assert "sessionA" in suspended_replays
-    assert "sessionB" in suspended_replays
+    # Handles are different (they encode different session_ids and macro_ids)
+    assert handle_a != handle_b
 
-    # Resume session A
-    resume_a = await resume_skill({}, "sessionA")
+    # Decode and verify the handles contain correct state
+    payload_a = decode_replay_handle(handle_a)
+    assert payload_a.session_id == "sessionA"
+    assert payload_a.next_step_index == 2
+    assert payload_a.macro_id == macro_id_a
+
+    payload_b = decode_replay_handle(handle_b)
+    assert payload_b.session_id == "sessionB"
+    assert payload_b.next_step_index == 2
+    assert payload_b.macro_id == macro_id_b
+
+    # Resume session A by retrying replay_skill with the handle
+    # (step index 2 is past the end of the sequence, so it should succeed immediately)
+    resume_a = await replay_skill(macro_id_a, {}, session_id="sessionA", replay_handle=handle_a)
+    assert resume_a["_meta"]["resultType"] == "complete"
     assert resume_a["success"] is True
-    assert "sessionA" not in suspended_replays
-    assert "sessionB" in suspended_replays
 
     # Resume session B
-    resume_b = await resume_skill({}, "sessionB")
+    resume_b = await replay_skill(macro_id_b, {}, session_id="sessionB", replay_handle=handle_b)
+    assert resume_b["_meta"]["resultType"] == "complete"
     assert resume_b["success"] is True
-    assert "sessionB" not in suspended_replays
 
 
 @pytest.mark.anyio
@@ -225,5 +246,3 @@ async def test_session_state_persistence(monkeypatch):
     
     # Clean up
     session_state_store.clear_state("test-persist-session")
-
-
