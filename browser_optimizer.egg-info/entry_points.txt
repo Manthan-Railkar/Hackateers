@@ -1,0 +1,2 @@
+[console_scripts]
+browser-optimizer = browser_optimizer.cli:main
