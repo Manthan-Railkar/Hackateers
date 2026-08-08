@@ -53,14 +53,20 @@ AI Agents are revolutionizing web automation, but interacting with modern websit
 ### Option A: Install from PyPI (Recommended)
 
 ```bash
-pip install browser-optimizer
-browser-optimizer install
+# Install Pidgey from PyPI
+pip install pidgey
+
+# Download Playwright browser dependencies
+pidgey install
+
+# Start the MCP server and Mission Control dashboard
+pidgey start
 ```
 
 Or run instantly via `uvx` without manual installation:
 
 ```bash
-uvx browser-optimizer start
+uvx pidgey start
 ```
 
 ### Option B: Install from Source
@@ -87,7 +93,7 @@ pip install -e .
 
 4. Run the automated Playwright browser installer:
 ```bash
-browser-optimizer install
+pidgey install
 ```
 
 5. Copy the sample environment file:
@@ -110,10 +116,10 @@ GROQ_API_KEY=your_groq_api_key_here
 
 ### Run Commands
 
-Start the Browser Optimizer MCP server and Mission Control dashboard:
+Start the Pidgey MCP server and Mission Control dashboard:
 
 ```bash
-browser-optimizer start
+pidgey start
 ```
 
 ---
@@ -129,9 +135,25 @@ Add Pidgey under `mcpServers` in `claude_desktop_config.json` (`%APPDATA%\Claude
 ```json
 {
   "mcpServers": {
-    "pidgey-browser-optimizer": {
-      "command": "browser-optimizer",
+    "pidgey": {
+      "command": "pidgey",
       "args": ["start"],
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
+    }
+  }
+}
+```
+
+Or using `uvx` (zero installation required):
+
+```json
+{
+  "mcpServers": {
+    "pidgey": {
+      "command": "uvx",
+      "args": ["pidgey", "start"],
       "env": {
         "PYTHONUNBUFFERED": "1"
       }
@@ -148,8 +170,21 @@ Add Pidgey to your workspace or global `mcp_config.json`:
 {
   "mcpServers": {
     "pidgey": {
-      "command": "browser-optimizer",
+      "command": "pidgey",
       "args": ["start"]
+    }
+  }
+}
+```
+
+Or using `uvx`:
+
+```json
+{
+  "mcpServers": {
+    "pidgey": {
+      "command": "uvx",
+      "args": ["pidgey", "start"]
     }
   }
 }
@@ -163,7 +198,7 @@ Add Pidgey to your workspace or global `mcp_config.json`:
 4. Configure details:
    - **Name**: `Pidgey`
    - **Type**: `command` (stdio)
-   - **Command**: `browser-optimizer start`
+   - **Command**: `pidgey start` (or `uvx pidgey start`)
 5. Click **Save**.
 
 ### Custom Agent Frameworks (LangChain, LlamaIndex, AutoGen)
@@ -173,7 +208,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 server_params = StdioServerParameters(
-    command="browser-optimizer",
+    command="pidgey",
     args=["start"]
 )
 
