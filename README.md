@@ -54,7 +54,7 @@ AI Agents are revolutionizing web automation, but interacting with modern websit
 
 ```bash
 # Install Pidgey from PyPI
-pip install pidgey
+pip install pidgey-mcp
 
 # Download Playwright browser dependencies
 pidgey install
@@ -66,7 +66,7 @@ pidgey start
 Or run instantly via `uvx` without manual installation:
 
 ```bash
-uvx pidgey start
+uvx pidgey-mcp start
 ```
 
 ### Option B: Install from Source
@@ -153,7 +153,7 @@ Or using `uvx` (zero installation required):
   "mcpServers": {
     "pidgey": {
       "command": "uvx",
-      "args": ["pidgey", "start"],
+      "args": ["pidgey-mcp", "start"],
       "env": {
         "PYTHONUNBUFFERED": "1"
       }
@@ -184,7 +184,7 @@ Or using `uvx`:
   "mcpServers": {
     "pidgey": {
       "command": "uvx",
-      "args": ["pidgey", "start"]
+      "args": ["pidgey-mcp", "start"]
     }
   }
 }
