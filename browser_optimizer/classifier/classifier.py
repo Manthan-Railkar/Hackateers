@@ -36,7 +36,7 @@ class TaskClassifier:
             self._predictor = PageClassifierPredictor()
             logger.info("ML TaskClassifier initialized successfully.")
         except Exception as e:
-            logger.error(f"Failed to initialize ML PageClassifierPredictor: {e}")
+            logger.warning(f"ML PageClassifierPredictor not available: {e}. Using heuristic fallback.")
             self._predictor = None
 
     def classify(self, context: Dict[str, Any]) -> Dict[str, Any]:

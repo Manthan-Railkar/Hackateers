@@ -6,7 +6,15 @@ from typing import Dict, Any, Optional, List
 try:
     from fastmcp import FastMCP
 except ImportError:
-    from mcp.server.fastmcp import FastMCP
+    try:
+        from mcp.server.fastmcp import FastMCP
+    except ImportError:
+        raise ImportError(
+            "Could not import FastMCP. Please install the required package:\n"
+            "  pip install fastmcp>=3.5.0\n"
+            "Or reinstall pidgey-mcp which includes it:\n"
+            "  pip install pidgey-mcp --upgrade"
+        )
 
 from browser_optimizer.config.settings import settings
 from browser_optimizer.config.protocol import (
@@ -1236,14 +1244,35 @@ async def mcp_get_tool_schema(tool_name: str) -> Dict[str, Any]:
     Retrieve the full input parameters schema for a specific tool by name.
     """
     try:
-        tool_obj = mcp._tool_manager.get_tool(tool_name)
-        if tool_obj is None:
+        all_tools = await mcp._original_list_tools()
+        target = None
+        for t in all_tools:
+            if getattr(t, "name", None) == tool_name:
+                target = t
+                break
+
+        if target is None and hasattr(mcp, "_tool_manager"):
+            try:
+                target = mcp._tool_manager.get_tool(tool_name)
+            except Exception:
+                pass
+
+        if target is None:
             return _complete_result({"success": False, "error": f"Tool '{tool_name}' not found."})
+
+        params = getattr(target, "parameters", {})
+        if hasattr(params, "model_json_schema"):
+            params = params.model_json_schema()
+        elif hasattr(params, "schema"):
+            params = params.schema()
+        elif not isinstance(params, dict):
+            params = {"type": "object", "properties": {}}
+
         return _complete_result({
             "success": True,
             "tool_name": tool_name,
-            "description": tool_obj.description,
-            "input_schema": tool_obj.parameters
+            "description": getattr(target, "description", ""),
+            "input_schema": params
         })
     except Exception as e:
         return _complete_result({"success": False, "error": f"Tool '{tool_name}' not found: {str(e)}"})
