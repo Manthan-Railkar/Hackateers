@@ -1257,12 +1257,12 @@ async def mcp_get_tool_schema(tool_name: str) -> Dict[str, Any]:
 mcp._original_list_tools = mcp.list_tools
 
 
-async def _tools_list_with_cache_metadata():
+async def _tools_list_with_cache_metadata(*args, **kwargs):
     """
     Override tools/list to inject ttlMs and cacheScope into the response.
     All tools are returned — no progressive disclosure in a stateless protocol.
     """
-    return await mcp._original_list_tools()
+    return await mcp._original_list_tools(*args, **kwargs)
 
 
 mcp.list_tools = _tools_list_with_cache_metadata
