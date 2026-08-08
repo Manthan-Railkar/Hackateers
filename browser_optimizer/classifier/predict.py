@@ -33,10 +33,12 @@ class PageClassifierPredictor:
 
         # Locate models folder relative to this package, or root
         possible_dirs = [
-            # Package path
-            os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "page-classifier", "models")),
-            # Alternative package path (if directory structure is nested)
+            # Package path: browser_optimizer/models
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "models")),
+            # Package path: browser_optimizer/classifier/models
             os.path.abspath(os.path.join(os.path.dirname(__file__), "models")),
+            # Alternative package path
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "page-classifier", "models")),
             # Root project path
             os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "models")),
         ]
@@ -48,9 +50,12 @@ class PageClassifierPredictor:
                 break
 
         if not models_dir:
-            raise FileNotFoundError(
-                f"Could not locate page_classifier.pkl in any of: {possible_dirs}"
+            logger.warning(
+                f"Could not locate page_classifier.pkl in any of: {possible_dirs}. "
+                "Page classifier will fall back to default classification."
             )
+            cls._loaded = True
+            return
 
         logger.info(f"Loading page classifier models from: {models_dir}")
         try:
@@ -60,8 +65,8 @@ class PageClassifierPredictor:
             cls._loaded = True
             logger.info("Page classifier assets loaded successfully.")
         except Exception as e:
-            logger.error(f"Failed to load page classifier assets: {e}")
-            raise
+            logger.warning(f"Failed to load page classifier assets: {e}. Falling back to default classification.")
+            cls._loaded = True
 
     def __init__(self):
         self.feature_extractor = FeatureExtractor()

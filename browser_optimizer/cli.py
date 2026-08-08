@@ -44,13 +44,13 @@ BANNER = f"""
 """
 
 
-def _print_banner() -> None:
+def _print_banner(file=sys.stdout) -> None:
     from browser_optimizer import __version__
-    print(BANNER.format(version=__version__))
+    print(BANNER.format(version=__version__), file=file)
 
 
-def _divider() -> None:
-    print(f"{_C.DIM}{'─' * 46}{_C.RESET}")
+def _divider(file=sys.stdout) -> None:
+    print(f"{_C.DIM}{'─' * 46}{_C.RESET}", file=file)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -167,9 +167,45 @@ def cmd_doctor() -> None:
 # start
 # ─────────────────────────────────────────────────────────────
 def cmd_start() -> None:
-    _print_banner()
-    print(f"{_C.BOLD}Starting Browser Optimizer MCP server…{_C.RESET}")
-    print(f"{_C.DIM}(stdio mode — connect your MCP client){_C.RESET}\n")
+    def _log(*args, **kwargs):
+        kwargs["file"] = sys.stderr
+        print(*args, **kwargs)
+
+    _print_banner(file=sys.stderr)
+    _log(f"{_C.BOLD}{_C.GREEN}🚀 Starting Pidgey MCP Server (stdio mode)…{_C.RESET}\n")
+    _log(f"{_C.BOLD}🔌 AI Agent Connection Instructions:{_C.RESET}")
+    _log(f"{_C.DIM}Add the MCP server configuration below to your AI client (Claude Desktop, Antigravity IDE, Cursor, etc.):{_C.RESET}\n")
+
+    _log(f"{_C.CYAN}📋 Option 1: Standard PyPI Installed Package (pidgey-mcp){_C.RESET}")
+    _log(f"{_C.BOLD}" + '''{
+  "mcpServers": {
+    "pidgey": {
+      "command": "pidgey",
+      "args": ["start"]
+    }
+  }
+}''' + f"{_C.RESET}\n")
+
+    _log(f"{_C.CYAN}📋 Option 2: Zero-Install Execution via uvx{_C.RESET}")
+    _log(f"{_C.BOLD}" + '''{
+  "mcpServers": {
+    "pidgey": {
+      "command": "uvx",
+      "args": ["pidgey-mcp", "start"]
+    }
+  }
+}''' + f"{_C.RESET}\n")
+
+    _log(f"{_C.CYAN}📁 Configuration File Locations:{_C.RESET}")
+    _log(f"  • Claude Desktop:   %APPDATA%\\Claude\\claude_desktop_config.json  (Windows)")
+    _log(f"                      ~/Library/Application Support/Claude/claude_desktop_config.json (macOS)")
+    _log(f"  • Antigravity IDE:  ~/.gemini/config/mcp_config.json")
+    _log(f"  • Cursor / Windsurf: Settings → Features → MCP → Add New MCP Server\n")
+
+    _log(f"{_C.BOLD}💡 Automated Auto-Config:{_C.RESET} Run {_C.CYAN}pidgey install{_C.RESET} to auto-inject into Claude Desktop & Antigravity.")
+    _log(f"{_C.BOLD}📊 Mission Control Dashboard:{_C.RESET} http://localhost:8050/mission-control")
+    _divider(file=sys.stderr)
+    _log(f"\n{_C.DIM}(Server running in stdio mode — listening for JSON-RPC messages on stdin/stdout…){_C.RESET}\n")
 
     import asyncio
     from browser_optimizer.server.main import main
