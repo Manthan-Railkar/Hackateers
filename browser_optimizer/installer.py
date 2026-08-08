@@ -35,11 +35,18 @@ def _info(msg: str) -> None: print(f"  {_C.CYAN}ℹ️ {_C.RESET}  {msg}")
 # ─────────────────────────────────────────────────────────────
 def _mcp_entry() -> dict:
     """Build the MCP config block that points to this installation."""
-    python_exe = sys.executable
+    import shutil
+    pidgey_bin = shutil.which("pidgey") or shutil.which("browser-optimizer")
+    if pidgey_bin:
+        return {
+            "command": pidgey_bin,
+            "args": ["start"],
+        }
     return {
-        "command": python_exe,
+        "command": sys.executable,
         "args": ["-m", "browser_optimizer.server.main"],
     }
+
 
 
 # ─────────────────────────────────────────────────────────────

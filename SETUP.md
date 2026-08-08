@@ -1,6 +1,6 @@
 # Pidgey (Browser Optimizer MCP) - Setup & Integration Guide
 
-This guide provides step-by-step instructions for installing Pidgey via PyPI or source and connecting it as a **Model Context Protocol (MCP)** server to AI client environments including **Claude Desktop**, **Antigravity**, **Cursor IDE**, and custom agent frameworks.
+This guide provides step-by-step instructions for installing Pidgey via PyPI or source and connecting it as a **Model Context Protocol (MCP)** server to AI client environments including **Claude Desktop**, **Antigravity**, **Cursor IDE**, **Windsurf**, **VS Code (Continue)**, and custom agent frameworks.
 
 ---
 
@@ -12,16 +12,16 @@ Ensure you have **Python 3.10+** installed:
 
 ```bash
 # Install PyPI package
-pip install browser-optimizer
+pip install pidgey-mcp
 
-# Install Playwright browser dependencies
-browser-optimizer install
+# Install Playwright browser dependencies & auto-configure AI clients
+pidgey install
 ```
 
 Or run directly without manual installation via `uvx`:
 
 ```bash
-uvx browser-optimizer start
+uvx pidgey-mcp start
 ```
 
 ---
@@ -40,8 +40,8 @@ source .venv/bin/activate  # On Windows: .\.venv\Scripts\Activate.ps1
 # Install in editable mode
 pip install -e .
 
-# Run Playwright auto-installer
-browser-optimizer install
+# Run Playwright auto-installer & client detector
+pidgey install
 
 # Configure environment variables
 cp .env.example .env
@@ -51,9 +51,21 @@ cp .env.example .env
 
 ## 2. Connecting to AI Agent Environments
 
-Pidgey runs over standard input/output (`stdio`) transport. Below are setup configurations for major AI client applications.
+Pidgey runs over standard input/output (`stdio`) transport. Below are setup configurations for major AI client applications after downloading from PyPI.
 
 ---
+
+### Method 1: Automated Auto-Configuration
+
+Run:
+```bash
+pidgey install
+```
+This command automatically detects **Claude Desktop** and **Antigravity IDE** on your system and writes the MCP configuration block into their respective settings files.
+
+---
+
+### Method 2: Manual Configuration
 
 ### Option 1: Claude Desktop
 
@@ -61,13 +73,13 @@ Locate your `claude_desktop_config.json`:
 - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
 - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
 
-#### Using PyPI package / global CLI:
+#### Using PyPI package (`pip install pidgey-mcp`):
 
 ```json
 {
   "mcpServers": {
-    "pidgey-browser-optimizer": {
-      "command": "browser-optimizer",
+    "pidgey": {
+      "command": "pidgey",
       "args": ["start"],
       "env": {
         "PYTHONUNBUFFERED": "1"
@@ -82,25 +94,12 @@ Locate your `claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
-    "pidgey-browser-optimizer": {
+    "pidgey": {
       "command": "uvx",
-      "args": ["browser-optimizer", "start"],
+      "args": ["pidgey-mcp", "start"],
       "env": {
         "PYTHONUNBUFFERED": "1"
       }
-    }
-  }
-}
-```
-
-#### Using virtual environment absolute path (Windows example):
-
-```json
-{
-  "mcpServers": {
-    "pidgey-browser-optimizer": {
-      "command": "C:\\Users\\YourUsername\\.venv\\Scripts\\browser-optimizer.exe",
-      "args": ["start"]
     }
   }
 }
@@ -110,15 +109,15 @@ Restart Claude Desktop to load Pidgey tools.
 
 ---
 
-### Option 2: Antigravity
+### Option 2: Antigravity IDE
 
-Add Pidgey to your workspace or global `mcp_config.json`:
+Add Pidgey to your workspace or global `~/.gemini/config/mcp_config.json`:
 
 ```json
 {
   "mcpServers": {
     "pidgey": {
-      "command": "browser-optimizer",
+      "command": "pidgey",
       "args": ["start"]
     }
   }
@@ -132,7 +131,7 @@ Or using `uvx`:
   "mcpServers": {
     "pidgey": {
       "command": "uvx",
-      "args": ["browser-optimizer", "start"]
+      "args": ["pidgey-mcp", "start"]
     }
   }
 }
@@ -146,9 +145,9 @@ Or using `uvx`:
 2. Navigate to **Features** -> **MCP Servers**.
 3. Click **+ Add New MCP Server**.
 4. Configure details:
-   - **Name**: `Pidgey`
+   - **Name**: `pidgey`
    - **Type**: `command` (stdio)
-   - **Command**: `browser-optimizer start` (or `uvx browser-optimizer start`)
+   - **Command**: `pidgey start` (or `uvx pidgey-mcp start`)
 5. Click **Save**.
 
 ---

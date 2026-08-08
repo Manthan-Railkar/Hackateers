@@ -50,88 +50,63 @@ AI Agents are revolutionizing web automation, but interacting with modern websit
 - **Git**: Installed on your system
 - **Groq API Key** *(Optional)*: Required for Multimodal VLM vision fallback on Canvas apps
 
+## Installation & Setup
+
+### Prerequisites
+
+- **Python**: v3.10 or higher (Python 3.11+ recommended)
+- **Git**: Installed on your system
+- **Groq API Key** *(Optional)*: Required for Multimodal VLM vision fallback on Canvas apps
+
 ### Option A: Install from PyPI (Recommended)
 
 ```bash
-# Install Pidgey from PyPI
+# 1. Install Pidgey MCP from PyPI
 pip install pidgey-mcp
 
-# Download Playwright browser dependencies
+# 2. Run the auto-installer (Installs Playwright browsers & auto-configures connected AI agents)
 pidgey install
 
-# Start the MCP server and Mission Control dashboard
+# 3. Start the MCP server & Mission Control dashboard manually if testing locally
 pidgey start
 ```
 
-Or run instantly via `uvx` without manual installation:
+Or run instantly via `uvx` without pre-installing:
 
 ```bash
 uvx pidgey-mcp start
 ```
 
-### Option B: Install from Source
+---
 
-1. Clone the repository:
-```bash
-git clone https://github.com/Manthan-Railkar/Hackateers.git
-cd Hackateers
-```
+## 🔌 Connecting your AI Agent (Post-PyPI Installation)
 
-2. Create and activate a Python virtual environment:
-```bash
-python -m venv .venv
-# On macOS/Linux:
-source .venv/bin/activate
-# On Windows (PowerShell):
-.\.venv\Scripts\Activate.ps1
-```
+After downloading `pidgey-mcp` from PyPI, you connect the installed MCP server to your AI Agent environment so the agent can discover and invoke Pidgey's browser tools.
 
-3. Install the package in editable mode:
-```bash
-pip install -e .
-```
+### Method 1: Automated Auto-Configuration (Recommended)
 
-4. Run the automated Playwright browser installer:
+Simply run:
 ```bash
 pidgey install
 ```
-
-5. Copy the sample environment file:
-```bash
-cp .env.example .env
-```
-
-6. Configure environment variables in `.env`:
-```env
-LOG_LEVEL=INFO
-HEADLESS=True
-CACHE_ENABLED=True
-ENABLE_CHECKPOINTING=True
-ENABLE_LLMS_DISCOVERY=True
-ENABLE_DIRECT_FETCH=True
-WEBSOCKET_PORT=8765
-DASHBOARD_PORT=8050
-GROQ_API_KEY=your_groq_api_key_here
-```
-
-### Run Commands
-
-Start the Pidgey MCP server and Mission Control dashboard:
-
-```bash
-pidgey start
-```
+The automated setup wizard will:
+1. Download Playwright Chromium browser binaries.
+2. Auto-detect installed AI clients (**Claude Desktop**, **Antigravity IDE**) on Windows and macOS.
+3. Inject the `pidgey` MCP server configuration into your client's config file automatically.
 
 ---
 
-## 🔌 Connecting to AI Agents
+### Method 2: Manual AI Agent Connection
 
-Pidgey runs over standard input/output (`stdio`) transport and integrates into any MCP-compliant agent client.
+If you want to configure your AI Agent manually after running `pip install pidgey-mcp`, add the corresponding JSON snippet below into your client's configuration file.
 
-### Claude Desktop
+#### 1. Claude Desktop
 
-Add Pidgey under `mcpServers` in `claude_desktop_config.json` (`%APPDATA%\Claude\claude_desktop_config.json` on Windows or `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
+Location of `claude_desktop_config.json`:
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
 
+**Using PyPI-installed CLI (`pip install pidgey-mcp`):**
 ```json
 {
   "mcpServers": {
@@ -146,8 +121,7 @@ Add Pidgey under `mcpServers` in `claude_desktop_config.json` (`%APPDATA%\Claude
 }
 ```
 
-Or using `uvx` (zero installation required):
-
+**Using Zero-Install `uvx`:**
 ```json
 {
   "mcpServers": {
@@ -162,10 +136,12 @@ Or using `uvx` (zero installation required):
 }
 ```
 
-### Antigravity
+#### 2. Antigravity IDE
 
-Add Pidgey to your workspace or global `mcp_config.json`:
+Location of `mcp_config.json`:
+- **Path**: `~/.gemini/config/mcp_config.json`
 
+**Using PyPI-installed CLI:**
 ```json
 {
   "mcpServers": {
@@ -177,8 +153,7 @@ Add Pidgey to your workspace or global `mcp_config.json`:
 }
 ```
 
-Or using `uvx`:
-
+**Using `uvx`:**
 ```json
 {
   "mcpServers": {
@@ -190,20 +165,52 @@ Or using `uvx`:
 }
 ```
 
-### Cursor IDE
+#### 3. Cursor IDE
 
 1. Open **Cursor Settings** (`Ctrl + ,` or `Cmd + ,`).
 2. Navigate to **Features** -> **MCP Servers**.
 3. Click **+ Add New MCP Server**.
 4. Configure details:
-   - **Name**: `Pidgey`
+   - **Name**: `pidgey`
    - **Type**: `command` (stdio)
-   - **Command**: `pidgey start` (or `uvx pidgey start`)
+   - **Command**: `pidgey start` *(or `uvx pidgey-mcp start`)*
 5. Click **Save**.
 
-### Custom Agent Frameworks (LangChain, LlamaIndex, AutoGen)
+#### 4. Windsurf IDE
+
+Add to `.codeium/windsurf/mcp_config.json`:
+```json
+{
+  "mcpServers": {
+    "pidgey": {
+      "command": "pidgey",
+      "args": ["start"]
+    }
+  }
+}
+```
+
+#### 5. VS Code (Continue Extension)
+
+Add to `~/.continue/config.json`:
+```json
+{
+  "mcpServers": [
+    {
+      "name": "pidgey",
+      "command": "pidgey",
+      "args": ["start"]
+    }
+  ]
+}
+```
+
+#### 6. Custom Python Agents (LangChain, LlamaIndex, AutoGen)
+
+Connect programmatically using the official `mcp` Python SDK:
 
 ```python
+import asyncio
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
@@ -212,12 +219,41 @@ server_params = StdioServerParameters(
     args=["start"]
 )
 
-async with stdio_client(server_params) as (read, write):
-    async with ClientSession(read, write) as session:
-        await session.initialize()
-        tools = await session.call_tool("list_tools", {})
-        print("Available MCP tools:", tools)
+async def main():
+    async with stdio_client(server_params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            
+            # List exposed Pidgey MCP tools
+            tools = await session.call_tool("list_tools", {})
+            print("Connected tools:", len(tools.content))
+            
+            # Extract compressed page context
+            result = await session.call_tool("extract_context", {"url": "https://example.com"})
+            print("Extracted Context:", result)
+
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
+
+---
+
+### How the Connection Works Under the Hood
+
+```text
++-----------------------+                    +-------------------------+
+|                       |  1. Spawn command  |                         |
+|  AI Agent / IDE Client| -----------------> |  pidgey (PyPI package)  |
+| (Claude, Cursor, etc.)|                    |                         |
+|                       |  2. stdio protocol |                         |
+|                       | <----------------> |  MCP FastMCP Server     |
++-----------------------+    (JSON-RPC 2.0)  +-------------------------+
+```
+
+1. **Subprocess Spawning**: When the AI Agent starts, it reads its MCP configuration JSON and spawns a background subprocess executing `pidgey start` (or `uvx pidgey-mcp start`).
+2. **Standard I/O Transport (`stdio`)**: Communication flows over standard input/output using JSON-RPC 2.0 messages.
+3. **Tool Registration**: The AI Agent sends a `tools/list` handshake to discover all 28 native Pidgey tools and injects them into the LLM's context window.
+4. **Execution & Context Return**: When the LLM decides to browse or act on a web page, the AI Agent invokes `extract_context` or `execute_action` over `stdin`. Pidgey executes the request and returns the hyper-compressed context over `stdout`.
 
 ---
 
