@@ -3,7 +3,10 @@ import json
 import base64
 import websockets
 from typing import Dict, Any, Optional, List
-from mcp.server.fastmcp import FastMCP
+try:
+    from fastmcp import FastMCP
+except ImportError:
+    from mcp.server.fastmcp import FastMCP
 
 from browser_optimizer.config.settings import settings
 from browser_optimizer.config.protocol import (
