@@ -27,13 +27,29 @@ async def test_all_tools_exposed_in_list():
     assert "get_tool_schema" in exposed_names
 
 
+import json
+
+async def _call_tool_compat(mcp_server, tool_name, args):
+    ret = await mcp_server.call_tool(tool_name, args)
+    if isinstance(ret, tuple):
+        if len(ret) == 2 and isinstance(ret[1], dict):
+            return ret[0], ret[1]
+        content = ret[0]
+        text = content[0].text if content and hasattr(content[0], "text") else "{}"
+        return content, {"result": json.loads(text)}
+    elif hasattr(ret, "content"):
+        text = ret.content[0].text if ret.content and hasattr(ret.content[0], "text") else "{}"
+        return ret.content, {"result": json.loads(text)}
+    return ret, {}
+
+
 @pytest.mark.anyio
 async def test_list_tools_meta_tool_returns_caching_metadata():
     """
     MCP 2026-07-28: list_tools response must include ttlMs and cacheScope
     caching metadata so clients know how long to cache tool catalogs.
     """
-    res, extra = cast(Tuple[List[Any], Dict[str, Any]], await mcp.call_tool("list_tools", {}))
+    res, extra = await _call_tool_compat(mcp, "list_tools", {})
     assert "result" in extra
     result = extra["result"]
     
@@ -63,7 +79,7 @@ async def test_list_tools_meta_tool_returns_caching_metadata():
 @pytest.mark.anyio
 async def test_get_tool_schema_tool():
     """Verify that get_tool_schema returns the correct parameters schema for a tool."""
-    res, extra = cast(Tuple[List[Any], Dict[str, Any]], await mcp.call_tool("get_tool_schema", {"tool_name": "extract_context"}))
+    res, extra = await _call_tool_compat(mcp, "get_tool_schema", {"tool_name": "extract_context"})
     assert "result" in extra
     result = extra["result"]
     
@@ -113,7 +129,7 @@ async def test_unexposed_tool_execution():
     
     try:
         # Call extract_context directly via call_tool
-        res, extra = cast(Tuple[List[Any], Dict[str, Any]], await mcp.call_tool("extract_context", {"url": "https://example.com", "session_id": "test_exec"}))
+        res, extra = await _call_tool_compat(mcp, "extract_context", {"url": "https://example.com", "session_id": "test_exec"})
         assert "result" in extra
         result = extra["result"]
         

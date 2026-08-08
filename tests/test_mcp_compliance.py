@@ -248,16 +248,29 @@ def test_decode_invalid_handle():
 # Caching Metadata on List Responses
 # ─────────────────────────────────────────────────────────────
 
+import json
+
+async def _call_tool_compat(mcp_server, tool_name, args):
+    ret = await mcp_server.call_tool(tool_name, args)
+    if isinstance(ret, tuple):
+        if len(ret) == 2 and isinstance(ret[1], dict):
+            return ret[0], ret[1]
+        content = ret[0]
+        text = content[0].text if content and hasattr(content[0], "text") else "{}"
+        return content, {"result": json.loads(text)}
+    elif hasattr(ret, "content"):
+        text = ret.content[0].text if ret.content and hasattr(ret.content[0], "text") else "{}"
+        return ret.content, {"result": json.loads(text)}
+    return ret, {}
+
+
 @pytest.mark.anyio
 async def test_caching_metadata_on_list_tools():
     """
     MCP 2026-07-28: The list_tools meta-tool response must include
     _cache.ttlMs and _cache.cacheScope tags.
     """
-    res, extra = cast(
-        Tuple[List[Any], Dict[str, Any]],
-        await mcp.call_tool("list_tools", {}),
-    )
+    res, extra = await _call_tool_compat(mcp, "list_tools", {})
     assert "result" in extra
     result = extra["result"]
 
