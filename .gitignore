@@ -18,6 +18,7 @@ venv.bak/
 htmlcov/
 dist/
 build/
+browser_optimizer-*/
 *.egg-info/
 cache.db
 *.db

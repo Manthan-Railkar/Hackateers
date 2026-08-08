@@ -1,100 +1,67 @@
-# Pidgey(Browser Optimizer MCP) - Setup & Integration Guide
+# Pidgey (Browser Optimizer MCP) - Setup & Integration Guide
 
-This guide provides step-by-step instructions for installing Pidgey and connecting it as a **Model Context Protocol (MCP)** server to your favorite AI clients, including **Antigravity**, **Claude Desktop**, **Cursor**, and custom agent frameworks.
+This guide provides step-by-step instructions for installing Pidgey via PyPI or source and connecting it as a **Model Context Protocol (MCP)** server to AI client environments including **Claude Desktop**, **Antigravity**, **Cursor IDE**, and custom agent frameworks.
 
 ---
 
-## 🛠️ 1. Prerequisites & Installation
+## 1. Installation Methods
 
-### Step 1: Clone and Set Up Virtual Environment
-Ensure you have **Python 3.10+** installed.
+### Option A: Install from PyPI (Recommended)
 
-```bash
-# Clone the repository
-git clone https://github.com/Manthan-Railkar/Pidgey.git
-cd Pidgey
-
-# Create and activate a virtual environment
-python -m venv .venv
-
-# On Windows (PowerShell):
-.\.venv\Scripts\Activate.ps1
-# On macOS/Linux:
-source .venv/bin/activate
-```
-
-### Step 2: Install Pidgey Package
-Install Pidgey in editable mode so the `browser-optimizer` CLI executable is registered globally in your virtual environment:
+Ensure you have **Python 3.10+** installed:
 
 ```bash
-pip install -e .
-```
+# Install PyPI package
+pip install browser-optimizer
 
-### Step 3: Run the Auto-Installer
-Pidgey includes an automated setup script that downloads the required Playwright Chromium browser binary and initializes your configuration:
-
-```bash
+# Install Playwright browser dependencies
 browser-optimizer install
 ```
 
-### Step 4: Configure Environment Variables
-Copy the `.env.example` file to `.env`:
+Or run directly without manual installation via `uvx`:
 
 ```bash
+uvx browser-optimizer start
+```
+
+---
+
+### Option B: Install from Source
+
+```bash
+# Clone the repository
+git clone https://github.com/Manthan-Railkar/Hackateers.git
+cd Hackateers
+
+# Create and activate virtual environment
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .\.venv\Scripts\Activate.ps1
+
+# Install in editable mode
+pip install -e .
+
+# Run Playwright auto-installer
+browser-optimizer install
+
+# Configure environment variables
 cp .env.example .env
 ```
 
-*(Optional for Vision Fallback)*: To enable Multimodal VLM fallback for Canvas apps and CAPTCHAs, add your [Groq API Key](https://console.groq.com/keys) to `.env`:
+---
 
-```env
-GROQ_API_KEY=your_groq_api_key_here
-GROQ_VISION_MODEL=llama-3.2-11b-vision-preview
-```
+## 2. Connecting to AI Agent Environments
+
+Pidgey runs over standard input/output (`stdio`) transport. Below are setup configurations for major AI client applications.
 
 ---
 
-## 🚀 2. Connecting to AI Clients
+### Option 1: Claude Desktop
 
-Pidgey runs over standard input/output (**stdio**) transport. Below are setup configurations for popular AI environments.
-
----
-
-### 🔹 Option A: Antigravity
-
-Add Pidgey to your Antigravity MCP settings configuration:
-
-```json
-{
-  "mcpServers": {
-    "pidgey": {
-      "command": "browser-optimizer",
-      "args": ["start"]
-    }
-  }
-}
-```
-
-*Alternative (Direct Python Execution)*:
-```json
-{
-  "mcpServers": {
-    "pidgey": {
-      "command": "python",
-      "args": ["-m", "browser_optimizer.server.main"]
-    }
-  }
-}
-```
-
----
-
-### 🔹 Option B: Claude Desktop
-
-Locate or create your `claude_desktop_config.json` file:
+Locate your `claude_desktop_config.json`:
 - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
 - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
 
-Add Pidgey under `mcpServers`:
+#### Using PyPI package / global CLI:
 
 ```json
 {
@@ -110,13 +77,62 @@ Add Pidgey under `mcpServers`:
 }
 ```
 
-*Note for Windows*: If using an absolute path to your Python virtual environment:
+#### Using `uvx` (no pre-installation required):
+
 ```json
 {
   "mcpServers": {
     "pidgey-browser-optimizer": {
-      "command": "C:\\path\\to\\Pidgey\\.venv\\Scripts\\browser-optimizer.exe",
+      "command": "uvx",
+      "args": ["browser-optimizer", "start"],
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
+    }
+  }
+}
+```
+
+#### Using virtual environment absolute path (Windows example):
+
+```json
+{
+  "mcpServers": {
+    "pidgey-browser-optimizer": {
+      "command": "C:\\Users\\YourUsername\\.venv\\Scripts\\browser-optimizer.exe",
       "args": ["start"]
+    }
+  }
+}
+```
+
+Restart Claude Desktop to load Pidgey tools.
+
+---
+
+### Option 2: Antigravity
+
+Add Pidgey to your workspace or global `mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "pidgey": {
+      "command": "browser-optimizer",
+      "args": ["start"]
+    }
+  }
+}
+```
+
+Or using `uvx`:
+
+```json
+{
+  "mcpServers": {
+    "pidgey": {
+      "command": "uvx",
+      "args": ["browser-optimizer", "start"]
     }
   }
 }
@@ -124,25 +140,25 @@ Add Pidgey under `mcpServers`:
 
 ---
 
-### 🔹 Option C: Cursor IDE
+### Option 3: Cursor IDE
 
 1. Open **Cursor Settings** (`Ctrl + ,` or `Cmd + ,`).
 2. Navigate to **Features** -> **MCP Servers**.
 3. Click **+ Add New MCP Server**.
-4. Configure the server:
+4. Configure details:
    - **Name**: `Pidgey`
    - **Type**: `command` (stdio)
-   - **Command**: `browser-optimizer start`
+   - **Command**: `browser-optimizer start` (or `uvx browser-optimizer start`)
 5. Click **Save**.
 
 ---
 
-### 🔹 Option D: Custom Agent Frameworks (LangChain, LlamaIndex, AutoGen)
+### Option 4: Custom Agent Frameworks (LangChain, LlamaIndex, AutoGen)
 
-If you are invoking Pidgey programmatically from custom Python/TypeScript MCP client libraries:
+Programmatic Python MCP client invocation:
 
-#### Python (mcp client):
 ```python
+import asyncio
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
@@ -152,63 +168,49 @@ server_params = StdioServerParameters(
     env=None
 )
 
-async with stdio_client(server_params) as (read, write):
-    async with ClientSession(read, write) as session:
-        await session.initialize()
-        # Discover tools via progressive disclosure
-        tools = await session.call_tool("list_tools", {})
-        print("Available tools:", tools)
+async def main():
+    async with stdio_client(server_params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            
+            # Discover tools
+            tools = await session.call_tool("list_tools", {})
+            print("Connected tools:", len(tools.content))
+            
+            # Extract compressed page context
+            result = await session.call_tool("extract_context", {"url": "https://example.com"})
+            print("Extracted Context:", result)
+
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
 
 ---
 
-## 📊 3. Accessing the Mission Control Dashboard
+## 3. Accessing the Mission Control Dashboard
 
-When Pidgey starts, it automatically spins up a background HTTP web server at `http://localhost:8050`.
+When Pidgey starts, it automatically spins up a background HTTP server at `http://localhost:8050`.
 
-Open **`http://localhost:8050`** in your browser to monitor:
-- **Live Token Savings Counter** (using exact `tiktoken` byte-pair encoding counts)
+Open **`http://localhost:8050/mission-control`** in your web browser to monitor:
+- **Real-Time Token Savings Counter** (via `tiktoken` byte-pair encoding counts)
 - **Cache Hit / Miss & Semantic Hit Ratios**
-- **Live Viewport Stream** & screenshot playback
+- **Live Viewport Stream & Screenshots**
 - **Session Replay Timelines**
 
 ---
 
-## 🛠️ 4. MCP Tools Exposed to AI Agents
+## 4. Verification & Testing
 
-Once connected, your AI Agent will have progressive access to the following tools:
+Verify CLI start from terminal:
 
-| Meta / Tool | Description |
-| :--- | :--- |
-| `list_tools` | Meta-tool returning lightweight names and descriptions of all tools |
-| `get_tool_schema` | On-demand retrieval of full parameter schemas for specific tools |
-| `extract_context` | Navigates to a URL and returns hyper-compressed interactive UI JSON |
-| `execute_action` | Executes Playwright actions (`click`, `type`, `select`, `scroll`) |
-| `page_diff` | Computes DOM state deltas (added/removed elements) |
-| `classify_page` | Categorizes page type (`LOGIN`, `SEARCH`, `CHECKOUT`, `PRODUCT`) via LightGBM ML model |
-| `summarize_page` | Generates a concise semantic summary of element counts & content |
-| `watch_page` | Spawns a background WebSocket poller pushing real-time diffs |
-| `start_macro_recording` / `save_macro` | Records repetitive action sequences into reusable skills |
-| `suggest_skill` / `replay_skill` | Replays saved macros with confidence-based routing & fallback |
-| `get_session_replay` | Fetches step-by-step session execution logs |
-
----
-
-## 🧪 5. Troubleshooting & Verification
-
-### Test manual execution from terminal:
 ```bash
 browser-optimizer start
 ```
-You should see:
-```text
-INFO | Starting Browser...
-INFO | Chromium Started
-INFO | Dashboard Server running on http://localhost:8050
+
+Run test suite:
+
+```bash
+python -m pytest tests/ -v
 ```
 
-### Re-run test suite:
-```bash
-python -m pytest
-```
-All 52 unit/integration tests should pass.
+All 78 unit, integration, and protocol compliance tests should pass.

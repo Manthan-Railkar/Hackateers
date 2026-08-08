@@ -50,7 +50,20 @@ AI Agents are revolutionizing web automation, but interacting with modern websit
 - **Git**: Installed on your system
 - **Groq API Key** *(Optional)*: Required for Multimodal VLM vision fallback on Canvas apps
 
-### Setup Commands
+### Option A: Install from PyPI (Recommended)
+
+```bash
+pip install browser-optimizer
+browser-optimizer install
+```
+
+Or run instantly via `uvx` without manual installation:
+
+```bash
+uvx browser-optimizer start
+```
+
+### Option B: Install from Source
 
 1. Clone the repository:
 ```bash
